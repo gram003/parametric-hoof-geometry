@@ -1,0 +1,1832 @@
+module wall2(
+ref cb > "coffin bone part";
+int cb_points >"number of points in the coffin bone part";
+float toe_wt := 11.5 >"wall thickness at toe";
+float qtr_wt := 8 >"wall thickness at quarter";
+float heel_wt := 6.5 >"wall thickness at heel";
+float jt := 4  >"laminar junction thickness at toe";
+float ct := 18 >"distance from coffin bone tip to ground";
+float st := 10 >"sole thickness";
+float hw := 50 > "heel width at rearmost point on ground surface";
+float has := 65 >"heel angle from the side";
+float hab := 75 >"heel angle from the back";
+float ca := 30 >"coronet angle"; ! maybe not needed
+int bar_on_ground := 0 > "flag to indicate if bar is on ground";
+float scoop := 0> "quarter relief (scoop)";
+int toe_roll := 0> "flag to include toe roll";
+float sole_relief := 0> "offset of sole to prevent white line bulge";
+VAR int numpoints; ! number of points will be returned
+VAR vector toe_point; ! sagittal toe at ground level
+VAR vector widest_point;! widest point at ground level
+VAR vector heel_point ! point of heel at ground level
+);
+
+! TODO add cartilage layer at rear of pedal bone
+! TODO tidy up code
+
+! origin is at the distal point of the toe wall
+! The sole thickness parameter only controls the thickness of the sole
+! at the collateral groove and bar (inner) edge of the sole. The proximal
+! edge of the outer sole thickness is set by the coffin bone height.
+
+constant int BL=20; ! base level
+constant int CP=BL+1; ! construction points
+constant int CL=BL+2; ! construction lines
+constant int CU=BL+3; ! curves
+constant int SU=BL+5; ! surfaces - deprecated, use WL,HL,etc instead
+constant int PC=BL+6; ! point cloud
+constant int XP=BL+7; ! node points
+constant int SL=BL+8; ! sole surfaces
+constant int BR=BL+9; ! bar surfaces
+constant int WL=BL+10; ! wall surfaces
+constant int HL=BL+11; ! heel surfaces
+constant int ME=BL+12; ! mesh lines
+constant int LC=BL+13; ! lateral cartilage
+constant int PB=BL+14; ! coffin/pedal bone
+constant int VC=BL+15; ! vector cloud
+
+constant int PENCL=5; ! construction line pen colour
+constant int PENCS=5; ! construction csys pen colour
+constant int PENSL=3; ! sole pen colour
+constant int PENME=7; ! construction mesh pen colour
+
+constant int UP=50;
+constant int VP=40;
+
+constant int NSEG=16;
+
+int VP4;
+
+constant int NP=110; ! num points
+int lastpoint; ! point counter
+vector r(NP); ! construction points
+vector s(NP); ! node points on wall points, labelled w in output
+vector c(NP); ! node points from coffin bone part
+vector n(300); !global node points
+
+float phi;
+float theta(3); ! angles
+float wx, wy; !wall thickness in x and y dirs
+float jx, jy; !laminar junction thickness in x and y dirs
+float pjt; !laminar junction thickness at rear of pedal bone
+float hjt; !laminar junction thickness at heel
+
+float cx, cy; !height from cb tip to ground in x and y dirs
+float hy; ! apparent wall thickness at ground level
+
+float da, pa; !dorsal and palmar angles of the coffin bone
+float ch; ! cb height
+float wp, wd; ! cb width proximal and distal
+float ta; ! toe angle
+float wa; !wall angle at rear edge of cb, ie widest point
+float sinta, costa, tanta; !sin, cos and tan of toe angle
+! temporary variables
+float dx, dy, dz;
+
+!constant float sole_relief=0.25;
+!constant float sole_relief=0;
+
+! define apex of a cone 1.81*length of dorsal wall
+constant float apex_sf=1.81;
+
+constant int NPC=1000; ! number of points in surface cloud
+
+!planes
+ref sagittal_plane;
+ref ground_plane;
+ref solar_plane;
+ref cb_distal_plane;
+ref cb_mid_plane;
+ref cb_proximal_plane;
+
+!curves
+ref ground_line_outer;
+
+!surfaces
+ref wall_outer;
+ref wall_inner;
+ref bar_outer;
+ref bar_inner;
+ref sole_outer;
+ref sole_inner;
+ref lc_outer;
+ref lc_inner;
+ref cb_outer;
+ref cb_inner;
+
+!cone apexes
+ref apex_front;
+ref apex_front_ground;
+ref apex_rear;
+
+! mesh curves and planes
+ref mcurve(0:45);
+ref mplane(0:5);
+
+! vars for node file
+FILE nodef;
+string nstr*132;
+
+
+! temporary variables
+int i,j,ifirst,ilast,nplanes,nnode,lastnode;
+string label*10;
+ref pid;
+ref curves(2); ! curve array for sur_curves
+vector offset;
+vector tmp;
+vector tmp2;
+
+float x,y,z,pos;
+
+beginmodule
+  VP4 := trunc(VP/4);
+  
+  unblank_level(CP);
+  blank_level(CL);
+  unblank_level(CU);
+!   unblank_level(SU); ! not used
+  blank_level(PC);
+  blank_level(XP);
+  blank_level(SL);
+  blank_level(BR);
+  blank_level(WL);
+  blank_level(HL);
+  blank_level(LC);
+  unblank_level(ME);
+  blank_level(VC);
+    
+  !init vectors to zero
+  for i:=1 to NP do
+    s(i):=vec(0,0,0);
+  endfor;
+
+  ! get the parameters from the coffin bone part
+  !FLOAT da > "coffin bone dorsal angle";
+  !float pa > "coffin bone palmar angle";
+  !float ht > "coffin bone height to top of laminar junction";
+  !float wp > "coffin bone width at proximal outer rear edge";
+  !float wd > "coffin bone width at distal outer rear edge";
+  
+  da := getflt(global_ref(cb,9), 1);
+  pa := getflt(global_ref(cb,9), 2);
+  ch := getflt(global_ref(cb,9), 3);
+  wp := getflt(global_ref(cb,9), 4);
+  wd := getflt(global_ref(cb,9), 5);
+   
+  ! Extract the coords of the points on the coffin bone part,
+  ! they seem to be stored in the db in a filo manner. 
+  set_root_gm(global_ref(cb,9));
+  for i:=cb_points to 1 step -1 do
+    pid := get_next_gm( 0, 1);
+    IF  pid = #0 THEN
+      EXIT("Wall2: There are no more points in part:"+RSTR(cb));
+    ENDIF;
+    c(i):=on(pid);
+    s(i):=c(i);
+  endfor;
+  
+  for i:=1 to cb_points do
+    poi_free(#1000,c(i):level=CP);
+    text(#1001,c(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,"c"+str(i,1,0):level=CP,pen=PENCL,TSIZE=2, pen=2);
+  endfor;
+  
+  ta := da+pa;
+    
+  phi:=(1+sqrt(5))/2;
+  theta(1):=arctan(1/phi);
+  theta(2):=arctan(1/(phi+1));
+  theta(3):=arctan(1/(2*phi));
+
+  sinta:=sin(ta);
+  costa:=cos(ta);
+  tanta:=tan(ta);
+  
+  wx:=toe_wt/sinta;
+  wy:=toe_wt/costa;
+  jx:=jt/sinta;
+  jy:=jt/costa;
+  cx:=ct/tanta;
+  cy:=ct;
+
+  ! make quarter and heel laminar junction thickness the same ratio as wall thickness
+  pjt:=jt*(qtr_wt/toe_wt);
+  hjt:=jt*(heel_wt/toe_wt);
+  
+  hy:=toe_wt*sin(pa); ! apparent wall thickness - this is wrong
+
+  !quarter_thickness:=0.5;
+  !quarter_thickness:=0.7; ! Hampson et al 
+
+  s(1):=c(1)+vec(-cx-jx-wx,-ct,0); ! point of toe
+  csys_1p(#100,"origin", s(1), 0,0,0:level=CL,pen=PENCL);
+  wa:=arctan(-(c(4).y-c(3).y)/(c(4).z-c(3).z));
+
+  ! sagittal_plane
+    
+  csys_3p(#104,"sagittal_plane", c(1), c(9), c(1)+vec(0,1,0):level=CL,pen=PENCL);
+  sagittal_plane := #104;
+
+  csys_3p(#108, "cb_mid_plane", c(12), c(14), c(15):level=CL,pen=PENCL);
+  cb_mid_plane:=#108;
+
+  
+!s(3):=c(3)+vec(-(c(3).y+cy)/tan(has), -c(3).y-cy, c(3).z+(wt/2)+(jt*2)+cy*((c(3).y-c(4).y)/(c(3).z-c(4).z)));
+  !csys_1p(#51,"c3", c(3), 0,90,0:blank=0);
+  !mode_local(#51);
+  !csys_1p(#51,"c3_2", vec(, 0,90,0:blank=0);
+  !lin_ang(#50, on(#51), -wa, -2*ch);
+  !mode_global();
+  
+  s(3):=c(3)+vec(-(cy+(c(3).y))/tan(has), -c(3).y-cy + scoop, (qtr_wt)+(pjt)+((cy+c(3).y)/tan(wa)));
+    
+  !find x and y locations of point s6 - proximal point of heel
+  ! draw a line through c11 at the heel angle
+  csys_1p(#130, "c11-ha", c(11), 0,0,has-90:level=CL,pen=PENCL);
+  mode_local(#130);
+  lin_free(#131, vec(0,-ch, 0), vec(0,ch,0):level=ME,pen=PENCL);
+  ! offset the heel angle line by the quarter wall thickness
+  lin_offs(#132, #131, qtr_wt:level=ME,pen=PENCL);
+  mode_global();
+  !csys_3p(#135, "c2-c11", c(2), c(11), c(2)+vec(0,0,1):level=CL,pen=PENCL);
+  csys_3p(#135, "c1-c11", c(1), c(11), c(1)+vec(0,0,1):level=CL,pen=PENCL);
+  poi_free(#136, intersect(#135, #132):level=CL,pen=PENCL);
+    
+  s(6):=on(#136); !get x and y coords from point #136
+  ! find the z coord by 
+  s(6):= vec(s(6).x, s(6).y, hw - (c(11).y+hy+cy)/tan(hab));
+  
+  s(5):= vec(s(6).x-(s(6).y+cy)/tan(has), -cy, hw);
+
+  !find point s2 - top edge of coronet at toe
+  csys_1p(#102, "coronet", s(6), 90, -ca, 0:level=CL,pen=PENCL);
+  lin_ang(#101, s(1), ta, 150:level=CL,pen=PENCL);
+  s(2):=intersect(#102, #101);
+  
+  !find point s4
+  ! lies on line that goes from the widest point at the ground through
+  ! a point projected in the z dir from the distal rear edge of the cb.
+  ! This way the laminar junction thickness is preserved and the capsule
+  ! shape is always slave to the cb. 
+  
+  csys_3p(#103, "s3", s(3), c(3)+vec(0,0,pjt+qtr_wt), s(3)+vec(0,0,1):level=CL,pen=PENCL);
+  mode_local(#103);
+  lin_ang(#105, on(#103), 0, 3*ch:level=CL,pen=PENCL);
+  mode_global();
+  s(4):=intersect(#102, #105);
+      
+  s(7):=c(1)+vec(-cx-jx,-ct,0); ! inner wall at toe
+  
+  !find point s8 - inner edge of capsule at toe
+  csys_3p(#106, "c2", c(2), c(11),c(2)+vec(0,0,-1):level=CL,pen=PENCL);
+  lin_ang(#107, s(7), ta, 3*ch:level=CL,pen=PENCL);
+  s(8):=intersect(#106, #107);
+
+  s(9):=s(3)+vec(0, 0, -qtr_wt);
+
+  ! point s10 - lies on the intersection of a line through s3 and c3
+  ! and the inner coronet plane   
+  csys_3p(#109, "coronet_inner", c(2), c(11), c(2)+vec(0,0,-1):level=CL,pen=PENCL);
+  csys_3p(#110, "s9", s(9), c(3)+vec(0,0,pjt), s(9)+vec(0,0,1):level=CL,pen=PENCL);
+  cb_proximal_plane := #109;
+  mode_local(#110);
+  lin_ang(#111, on(#110), 0, 3*ch:level=CL,pen=PENCL);
+  mode_global();
+  s(10):=intersect(#109, #111);
+   
+  ! find point s11 - lies on a line drawn from the heel point (s5) to a point
+  ! 1/2 of the the distance from the widest point (s3) to the toe (s1) and the
+  ! the same width as the widest point(s3);
+  csys_1p(#112, "1/2 widest to toe", s(3)-vec((s(3).x-s(1).x)/2, -cy, 0), 0, 90, 0:level=CL,pen=PENCL);
+  lin_free(#113, s(5), on(#112):level=CL,pen=PENCL);
+  
+  ! use qtr_wt instead of heel_wt because this is in the "angle" of the heel
+  ! and this direction is oblique to the wall thickness.
+  s(11):=on(#113, inv_arcl(#113, qtr_wt));
+  
+  !similar for s12 
+  !csys_1p(#114, "palmar", c(1), 0, 0, pa:blank=0);
+  ! this (commented out) pos for s12 is wrong, it should have the same x and y as c11  
+  !lin_free(#115, s(6), on(#112):level=CL,pen=PENCL);
+  !lin_free(#115, s(6), c(4)-vec((c(4).x-c(2).x)*0.5, (c(4).y-c(2).y)*0.5, 0):level=CL,pen=PENCL);
+  !lin_free(#115, s(6), c(4)-vec((c(4).x-c(2).x)*0.5, (c(1).y-c(2).y)*0.5, 0):level=CL,pen=PENCL);
+
+  ! project point s(6) onto the pedal bone proximal plane (c2-c11)
+  poi_free(#114,s(6):level=CL,pen=PENCL);
+  mode_local(#106);!c2-c11
+  poi_proj(#116, on(#114):level=CL,pen=PENCL);
+  !lin_free(#115, s(6), c(1):level=CL,pen=PENCL);
+  mode_global();
+  !lin_free(#115, on(#116), vec(c(2).x, c(2).y, c(4).z):level=CL,pen=PENCL);
+  lin_free(#115, on(#116), vec(c(2).x, c(2).y, c(3).z):level=CL,pen=PENCL);
+  s(12):=on(#115, inv_arcl(#115, qtr_wt));
+  
+  ! point s13 is the projection of s6 onto the sagittal plane
+  ! used to create csys for projection
+  s(13):=s(6)+vec(0, 0, -s(6).z);
+  
+  !find the point of the frog
+  !project a line from c5 at the toe angle
+  lin_ang(#120, c(5), ta, -2*ch:level=CL,pen=PENCL);
+  
+  !find the intersection of this line with a line perpendicular to
+  !the volar surface 
+  lin_free(#121, c(5), c(1):level=CL,pen=PENCL);
+  csys_3p(#122, "c1-c5", on(#121, 0.5), c(5), on(#121, 0.5)+vec(0,1,0):level=CL,pen=PENCL,blank=1);
+  mode_local(#122);
+  csys_3p(#123, "c1-c5/2", on(#122), vec(0,0,1), vec(0,1,0):level=CL,pen=PENCL);
+  csys_1p(#124, "c1-c5/2+jt", on(#122)+vec(0,-jt,0), 90, 0, 0:level=CL,pen=PENCL);
+  mode_global();
+  ! s14 is the internal point of the frog 
+  s(14):=intersect(#120, #124);
+  ! s15 is the external point of the frog 
+  s(15):=intersect(#120, #123);
+  
+  !find point s16 - toe edge of laminar junction at sole
+  !project a line from c1 at the toe angle
+  lin_ang(#141, c(1), ta, -2*ch:level=CL,pen=PENCL);
+  s(16):=intersect(#124, #141);
+  
+  !find point s17 - edge of laminar junction at toe
+  csys_1p(#140, "ground plane", s(1), 90, 0, 0:level=CL,pen=PENCL);
+  s(17):=intersect(#140, #141)+vec(0,sole_relief,0);
+  ground_plane := #140;
+  
+  ! s19 sole on groundline at heel
+  lin_free(#219, s(11), vec(c(17).x, s(11).y+qtr_wt, c(17).z):level=CL,pen=PENCL);
+  !s(19):=on(#219, inv_arcl(#219, hjt*1.5)); ! scale by 1.5 to account for angle
+  s(19):=on(#113, inv_arcl(#113, qtr_wt+(hjt*1.5))); ! scale by 1.5 to account for angle
+  ! s26 is a construction point only
+  !s(26):=on(#219, inv_arcl(#219, 2.5*toe_wt))+vec(0,-toe_wt,0);
+  s(26):=on(#219, 0.3)+vec(0,-toe_wt,0);
+
+  !s24
+!   lin_free(#117, s(12), c(13):level=CL,pen=PENCL);
+!   s(24):=on(#117, inv_arcl(#117, 3*jt));
+  
+  ! on same line as s(12)
+  s(24):=on(#115, inv_arcl(#115, qtr_wt+hjt));!toe_wt+2*jt)); ! was 3
+
+  ! point s22 and point s23 the outside end of the bar 
+  ! The bar ends 1/2 way along the frog or 1*ch from c2 (=2*ch from c1)
+  ! create a csys on this plane
+  csys_1p(#155, "x=c(1).x+2*ch", vec(c(1).x+2*ch, 0, 0), 0, 90, 0:level=CL,pen=PENCL,pen=3);
+  
+  csys_3p(#160, "collateral groove", c(1), s(5), s(6):level=CL,pen=PENCL);
+   
+   ! point s23 (used to be end of bar inner, but now this is point s92
+  ! on a line projected outward from the projection of s14 onto the #155 plane
+  ! also create a horizontal line at the y level of s(14)
+  poi_free(#162, s(14):level=CL,pen=PENCL);
+  mode_local(#155);
+  poi_proj(#159, on(#162):level=CL,pen=PENCL);
+  lin_ang(#161, on(#159), 0, -2*ch:level=CL,pen=PENCL);
+  mode_global();
+  s(23):=intersect(#160, #161);
+   
+   ! point s22
+  ! in x: c(1).x+2*ch
+  ! in y: on a line parallel with c1-c5-c4 through s15
+  ! create this line
+  csys_3p(#156, "c1-c10", c(1), c(10), c(2):level=CL,pen=PENCL);
+  poi_free(#163, s(15):level=CL,pen=PENCL,pen=3);
+  mode_local(#156);
+  !lin_free(#156, c(1), c(4):leves(23)l=CL,pen=PENCL);
+  lin_ang(#157, on(#163), 0, 2*ch:level=CL,pen=PENCL);
+  ! and create a horizontal line at its intersection with the x plane
+  mode_global();
+  mode_local(#155);
+  lin_ang(#158, intersect(#155, #157), 0, -2*ch:level=CL,pen=PENCL);
+  mode_global();
+  ! in z: on a line from s5 to c1
+  s(22):=intersect(#160, #158)+vec(0,-st/2,0);
+  poi_free(#152, s(22):level=CL,pen=PENCL);
+
+  mode_local(#160);
+  ! adjust point s(22) it is in line with the collateral groove
+  poi_proj(#154, on(#152):level=CL,pen=PENCL);
+  !csys_3p(#154, "bar-inner", s(5), s(15), s(23):level=CP,pen=PENCL);
+  mode_global();
+  s(22):=on(#154);
+
+  ! FIXME: use s(28) to define the bar plane instead of s(22) so the bar can be made level
+  ! at the heel with the tip in the proper place. Will need to use a curve for the bar distal line
+  ! instead of a line.
+  s(28):=s(22);
+
+  ! make bars level with ground
+  if(bar_on_ground>0) then
+    s(22).y := s(1).y;
+    s(28).y := s(1).y;
+  endif;
+
+
+  ! adjust s(11) so inside of bar-heel is on the bar deflection rotation axis
+  csys_3p(#143, "bar_distal_plane", s(5), s(28), s(5)+vec(0,0,-1):level=CL,pen=PENCL);
+  poi_free(#147, s(11):level=CL,pen=PENCL);
+  poi_free(#148, s(19):level=CL,pen=PENCL);
+  mode_local(#143);
+  poi_proj(#144, on(#147):level=CL,pen=PENCL);
+  poi_proj(#149, on(#148):level=CL,pen=PENCL);
+  mode_global();
+  s(11):=on(#144);
+  s(19):=on(#149);
+
+!   ! point s18 - intersection of plane through c2 and c3 with offset line parallel with s11-s12
+!   csys_3p(#145, "c2-c3", c(2), c(3), c(2)+vec(0,0,1):level=CL,pen=PENCL);
+!   lin_free(#146, s(19), on(#115, inv_arcl(#115, toe_wt+jt)):level=CL,pen=PENCL);
+!   s(18):=intersect(#145, #146);
+
+  offset := vec(0,-2*jt,0);
+  csys_3p(#145, "c1-c9-c3 offset by 2*jt", c(1)+offset, c(9)+offset, c(3)+offset:level=CL,pen=PENCL);
+  !lin_free(#146, s(19), on(#115, inv_arcl(#115, toe_wt+jt)):level=CL,pen=PENCL);
+  lin_free(#146, s(19), s(24):level=CL,pen=PENCL);
+  s(18):=intersect(#145, #146);
+  !move s(18) distally by the solar corium thickness
+
+!   ! find the parameter value
+!   pos = inv_on(146,s(18));
+!   ! add the additionalm thickness
+!   pos
+  
+  solar_plane := #145;
+  
+  ! point s20
+  ! lies on the intersection of a line through s3 and c3 and the s16-s18 plane   
+  csys_3p(#150, "s16-18", s(16), vec(s(18).x, s(18).y, 0), s(16)+vec(0,0,1):level=CL,pen=PENCL);
+  lin_free(#151, s(9)+vec(0,0,-jt), s(10)+vec(0,0,-jt):level=CL,pen=PENCL);
+  s(20):=intersect(#150, #151);
+
+  !sole at widest point
+  s(21):=s(3)+vec(0, sole_relief, -qtr_wt-pjt);
+  
+  ! create a line from s12 to s11 and pick a point jt along this line.
+  ! Create a line normal to this point. The frog to
+  ! digital cushion junction is tangent to this line. 
+  
+
+
+!   lst_ini("Debug");
+!   tmp:=on(#144);
+!   nstr:=str(tmp.x)+" "+str(tmp.y)+" "+str(tmp.z)+" ";
+!   lst_lin(nstr);
+!   tmp:=s(11);
+!   nstr:=str(tmp.x)+" "+str(tmp.y)+" "+str(tmp.z)+" ";
+!   lst_lin(nstr);
+!   lst_exi();
+  
+  
+  r(1):=vec(0,0,toe_wt/4);
+  
+  !point s90 end of bar inner proximal
+  !s(90):= s(23)+r(1);
+  !s(90):= c(22)+offset;
+  s(90):=c(22)+vec(jt,-jt,-2*jt);
+  !point s89 end of bar inner distal
+  s(89):= s(90)+r(1)+vec(0,0,2*jt);
+
+  s(93):= s(22)+r(1);
+  s(94):= s(93)+r(1);
+
+  !s(25):=on(#115, inv_arcl(#115, toe_wt+6*jt))+vec(0,0,-jt/2);
+  ! mid way between c4 and c8
+  s(25):=vec(c(4).x, c(4).y, (c(4).z+c(8).z)/2);
+
+  ! s78 was at intersect of solar proximal plane
+  ! changed this to 1/3 of line from s18 to s24
+  ! s(78) := intersect(#135, #146);
+  lin_free(#225, s(18), s(24):level=CL,pen=PENCL);
+  s(78) := on(#225, 0.33);
+
+  lin_free(#226, s(94), s(21):level=CL,pen=PENCL);
+  !s(79) := on(#226, inv_arcl(#226,4*jt));
+  s(79) := on(#226, 0.6);
+
+   !s(81) := c(15) + vec(0,0,-4*jt);
+   s(81) := c(7) + vec(0,-0.5*(c(7).y-c(3).y),-4*jt);
+   s(82) := s(90) + vec(0,0,-1*jt);
+   s(83) := s(81) + vec(0,0,-toe_wt/4);
+!   !s(83) := c(15) + vec(0,0,-5*jt/4);
+   s(91) := c(22) + vec(0,0, -1*jt);
+!   !s(92) := c(22) + vec(0,0,-5*jt/4);
+!   !s(92) := s(91) + vec(0,0,-toe_wt/4);
+   s(92) := s(82) + vec(0,0,-toe_wt/4);
+
+
+  ! create points on the bars
+  !create a csys to intersect the bar curves with  
+  csys_3p(#180, "c3-c9-w4", c(3), c(9), s(4):level=CL,pen=PENCL);
+  
+  ! Note: these are also defined on level CU below
+  ! outer bar distal (ground) side construction line
+  lin_free(#240, s(5), s(22):LEVEL=CL,pen=PENCL);
+  
+  lin_free(#241, s(11), s(93):LEVEL=CL,pen=PENCL);
+  
+  ! inner sole at bar distal side
+  lin_free(#242, s(94), s(19):LEVEL=CL,pen=PENCL);
+  
+  ! sole/bar laminar junction proximal side
+  lin_free(#243, s(18), s(89):LEVEL=CL,pen=PENCL);
+
+!   s(30) := intersect(#180, #240);
+!   s(31) := intersect(#180, #241);
+!   s(32) := intersect(#180, #242);
+!   s(36) := intersect(#180, #243);
+  
+   ! create points on the heel
+  csys_3p(#182, "s16-s18", s(16), s(18), s(18)+vec(0,0,-1):level=CL,pen=PENCL);
+  lin_free(#183, s(5), s(6):level=CL,pen=PENCL);
+  lin_free(#184, s(11), s(12):level=CL,pen=PENCL);
+
+  !s(37) := intersect(#182, #183);
+  s(37) := on(#183, 0.3);
+  !s(38) := intersect(#182, #184);
+  s(38) := on(#184, 0.5);
+
+  ! points on the heel  
+  lin_free(#212, s(6), s(37):level=CL,pen=PENCL);
+!   s(84) := on(#212, 0.5);
+  lin_free(#213, s(12), s(38):level=CL,pen=PENCL);
+!   s(85) := on(#213, 0.5);
+  lin_free(#214, s(18), s(78):level=CL,pen=PENCL);
+!   s(86) := on(#214, 0.5);
+
+!   ! points on the bar  
+!   lin_free(#230, s(76), s(81):level=CL,pen=PENCL);
+!   s(87) := on(#230, 0.5);
+!   lin_free(#231, s(77), s(83):level=CL,pen=PENCL);
+!   s(88) := on(#231, 0.5);
+
+  ! create points on the sagittal plane
+  lin_free(#185, s(7), s(8):level=CL,pen=PENCL);
+  lin_free(#186, s(1), s(2):level=CL,pen=PENCL);
+  s(39) := intersect(#182, #185);  
+  !s(40) := intersect(#182, #186);
+  
+  s(41) := intersect(#135, #185);  
+  s(42) := intersect(#135, #186);
+
+  lin_free(#189, s(1), s(42):level=CL,pen=PENCL);
+  s(40) := on(#189, 0.5);
+  
+  s(43) := intersect(#109, #186);
+
+  lin_free(#191, s(22), s(92):level=CL,pen=PENCL);
+  
+  s(27) := on(#191, 0.5);
+  s(45) := on(#191, 0.7);
+
+!   csys_3p(#203, "c17-c19-c10", c(17), c(19), c(10):level=CL,pen=PENCL);
+!   s(61) := intersect(#203, #22);
+!   lin_free(#52, s(61), s(48):level=CL);
+!   !s(95):= on(#52, inv_arcl(#52, jt));
+!   !s(95):= intersect(#203, #26);
+!   s(97):= on(#52, inv_arcl(#52, jt));
+      
+! define apex of a cone apex_sf*length of dorsal wall
+  lin_free(#733, s(1), s(2):level=ME,pen=PENME);
+
+  csys_3p(#736, "dorsal_wall",s(2), s(1), s(1)+vec(0,0,1):level=ME,pen=PENME);
+  poi_free(#737, s(2));
+  mode_local(#736);
+  poi_free(#739, on(#737)+vec(-apex_sf*arcl(#733),0,0):level=ME,pen=PENME);
+  mode_global();
+  apex_front := #739;
+  
+  lin_free(#740, s(2), on(apex_front):level=ME,pen=PENME);
+
+  poi_free(#741, c(6));
+  mode_local(ground_plane);
+  poi_proj(#742, on(#741):level=ME,pen=PENME);
+  apex_front_ground:=#742;
+  mode_global();
+  
+  ! front cone axis line
+  lin_free(#745, on(apex_front), on(#742):level=ME,pen=PENCL);
+
+  ! apex for rear cone
+  csys_3p(#748, "heel_angle", s(6), s(13), s(5):level=ME,pen=PENME);
+
+  poi_free(#751, intersect(#745, #748, -1):level=CP,pen=PENCL);
+  apex_rear := #751;
+
+  ! line showing angle of rear cone
+  lin_free(#754, on(apex_rear), s(13):level=CL,pen=PENCL);
+
+  ! create planes by rotating around apex line
+  csys_3p(#757, "apex-front",on(#742), on(apex_front), on(#742)+vec(-1,0,0) :level=CL,pen=PENCL);
+  mode_local(#757);
+  csys_3p(#758, "apex-front2",on(#742), on(#742)+vec(0,0,1), on(#742)+vec(0,1,0) :level=CL,pen=PENCL);
+  mode_local(#758);
+  lin_ang(#760, on(#742), 0, 100:level=CL,pen=PENCL);
+  lin_ang(#763, on(#742), 5, 100:level=CL,pen=PENCL);
+  lin_ang(#766, on(#742), 22, 100:level=CL,pen=PENCL);
+  lin_ang(#767, on(#742), 39, 100:level=CL,pen=PENCL);
+  lin_ang(#768, on(#742), 56, 100:level=CL,pen=PENCL);
+  lin_ang(#769, on(#742), 73, 100:level=CL,pen=PENCL);
+  mode_global();
+  
+  csys_3p(#775, "wall_nodes-1", on(#742), on(#763,1), on(apex_front):level=ME,pen=PENME);
+  csys_3p(#781, "wall_nodes-2", on(#742), on(#766,1), on(apex_front):level=ME,pen=PENME);
+  csys_3p(#782, "wall_nodes-3", on(#742), on(#767,1), on(apex_front):level=ME,pen=PENME);
+  csys_3p(#783, "wall_nodes-4", on(#742), on(#768,1), on(apex_front):level=ME,pen=PENME);
+  csys_3p(#1200, "wall_nodes-5", on(#742), on(#769,1), on(apex_front):level=ME,pen=PENME);
+
+  csys_3p(#326, "coronet", c(2), c(11), c(2)+vec(0,0,-1):level=CL,pen=PENCL);
+  csys_3p(#327, "cb-distal", c(1), c(9), c(1)+vec(0,0,-1):level=CL,pen=PENCL);
+
+  ! curves on cb
+
+  !cb proximal outer edge
+  mode_local(#326);
+  cur_conic(#863,"FREE",
+    on(#1000.2), on(#1000.2) + vec(0,1,0), 0.4,
+    on(#1000.4), on(#1000.4) + vec(-1, 0, 0)
+  :LEVEL=ME,pen=PENME);
+  mode_global();
+  
+  ! cb distal outer edge
+  mode_local(#327);
+  cur_conic(#866,"FREE",
+    on(#1000.1), on(#1000.1) + vec(0,1,0), 0.4,
+    on(#1000.3), on(#1000.3) + vec(-1, 0, 0)
+  :LEVEL=ME,pen=PENME);
+  mode_global();
+  
+  ! cb distal rear/inner edge
+  cur_conic(#942,"FREE", on(#1000.5), on(#1000.5) + vec(0,0,1), 0.5, on(#1000.7), on(#1000.1) + vec(0, 0, 0):LEVEL=ME,pen=PENME);
+      
+  ! cb proximal rear/inner edge
+  csys_3p(#943, "joint_edge", on(#1000.6), on(#1000.10), on(#1000.6)+vec(0,0,1):level=CL,pen=PENCL);
+  mode_local(#943);
+  cur_conic(#946,"FREE", on(#1000.6), on(#1000.6) + vec(0,1,0), 0.7, on(#1000.8), on(#1000.8) + vec(-1, 0, 0):LEVEL=ME,pen=PENME);
+  mode_global();
+   
+!    s(47) := intersect(#775, #942);
+!    s(48) := intersect(#775, #946);
+   s(47) := intersect(#781, #942);
+   s(48) := intersect(#781, #946);
+
+   ! offset from inner edge of cb at rear
+!    s(49) := c(7)+vec(0,-jt,-jt*1.25);
+!    s(50) := c(8)+vec(0,0,-jt);
+   !s(50) := vec(0.5*(c(8).x+s(81).x), 0.5*(c(8).y+s(81).y), 0.5*(c(8).z+s(81).z));
+   s(50) := vec(0.5*(c(8).x+s(81).x), 0.5*(c(8).y+s(81).y), s(81).z+2*jt);
+   s(49) := +vec(s(50).x,c(3).y, 0.5*(s(50).z+s(81).z)+0.5*jt);
+   !s(49) := +vec(s(50).x,c(3).y, 0.5*(s(93).z+s(81).z)+jt);
+
+  ! cb rear plane
+  csys_3p(#329, "cb_rear_plane", on(#1000.3), on(#1000.4), on(#1000.7):level=CL,pen=PENCL);
+   
+   ! temporary points on lc on rear cb plane until I sort out scale factor issue
+!    s(53) := intersect(#329, #942);
+!    s(54) := intersect(#329, #946);
+
+  lastpoint:=98;
+
+  ! adjust position of s(1) to create toe bevel
+  ! It may require more than just this, for example fitting.
+  ! 9/28/09 I have formed a curved roll by mapping the xi1 derive to the xi3 deriv for the edge nodes 
+  if(toe_roll>0) then
+    dx:= 0.7*(s(40).x - s(1).x);
+    dy:= 0.7*(s(40).y - s(1).y);
+    ! s(1):=vec(0.5*(s(40).x+s(1).x), 0.5*(s(40).y+s(1).y), s(1).z);
+    s(1):=vec(s(1).x+dx, s(1).y+dy, s(1).z);
+  endif;
+
+  !create points and labels
+  for i:=1 to lastpoint do
+    poi_free(#2000, s(i):level=CP);
+    text(#2001,s(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,"w"+str(i,1,0):level=CP,TSIZE=2);
+  endfor;
+
+!
+! Note: For the wall Xi1 lines need to be defined so that they align with the fibre
+! direction. For the laminar junction the first fibre dir needs to align with the radial
+! direction and the second needs to be (either cicumferential or vertical, need to check).
+!
+
+/***************************************************
+  !create curves
+!*****************************************************/
+  ! ground line
+  cur_conic(#10,"FREE", s(1), s(1) + vec(0, 0, 1), 0.4,
+    s(3), s(3) + vec(-1, 0, 0), 0.4,
+    s(5),s(5)+vec(-1,0,10):LEVEL=CU);
+    ground_line_outer := #10;
+  
+  if(toe_roll>0) then
+  ! curve to represent toe roll - currently only for looks
+!   cur_conic(#1210,"FREE", s(7), s(7) + vec(-1, 0, 0), 0.4,
+!     s(1), on(#2000.2), 0.5,
+!     s(2),on(#2000.40):LEVEL=CU);
+    cur_conic(#1210,"FREE", s(7), s(7) + vec(-1, 0, 0), 0.6,
+      s(1), s(1)+vec(0,-1,0) :LEVEL=CU);
+  endif;
+  
+!   cur_conic(#1212,"FREE", s(168), s(168) + vec(-1, 0, 0), 0.6,
+!     s(153), s(153)+vec(0,-1,0) :LEVEL=CU);
+    
+
+! outer bar distal (ground) side
+!   cur_conic(#30,"FREE",
+!     on(#2000.5), on(#2000.5) + vec(0, 0, 1), 0.2,
+!     on(#2000.22), on(#2000.16) - on(#2000.22)
+!    :LEVEL=CU);
+  ! FIXME: need to make bar curved when hoof is contracted
+  mode_local(#143);! "bar_distal_plane"
+  cur_conic(#30,"FREE",
+    on(#2000.5), on(#2000.5) + vec(1, 1, 0), 0.2,
+    on(#2000.22), on(#2000.5)
+    :LEVEL=CU);
+  mode_global();
+
+  ! outer coronet
+  csys_3p(#320, "coronet", s(2), s(13), s(2)+vec(0,0,-1):level=CL,pen=PENCL);
+  mode_local(#320);
+  cur_conic(#11,"FREE", on(#2000.2), on(#2000.2) + vec(0,1,0), 0.4,
+    on(#2000.4), on(#2000.4) + vec(-1, 0, 0), 0.4,
+    on(#2000.6), on(#2000.6) + vec(1, 10, 0):LEVEL=CU);
+  mode_global();
+
+  ! outer bar proximal side
+  !cur_spline(#33, "CHORD", s(6),s(23),s(83),,s(92),c(1):level=CU);
+  cur_conic(#33,"FREE", on(#2000.6), on(#2000.6) + vec(0,0,1), 0.1,
+    on(#2000.83),on(#2000.83)-on(#2000.6)-vec(0,2*toe_wt,0), 0.5,
+    on(#2000.92),on(#2000.92)-on(#2000.6):LEVEL=CU);
+  
+! inner ground line 
+  cur_conic(#12,"FREE", s(7), s(7) + vec(0, 0, 1), 0.4,
+    s(9), s(9) + vec(-1, 0, 0), 0.4,
+     s(11),s(11)+vec(-1,0,5):LEVEL=CU);
+  
+  ! inner bar distal side
+  !lin_free(#31, s(11), s(93):LEVEL=CU);
+!  cur_conic(#19,"FREE",
+!    on(#2000.11), on(#2000.11) + vec(0, 0, 1), 0.2,
+!    on(#2000.93), on(#2000.16) - on(#2000.93)
+!   :LEVEL=CU);
+! make bar straight so when it is on the ground/shoe it is flat
+ cur_conic(#19,"FREE",
+   on(#2000.11), on(#2000.11) + vec(0, 0, 1), 0.2,
+   on(#2000.93), on(#2000.5):LEVEL=CU);
+  
+  ! inner coronet
+  csys_3p(#322, "coronet_inner", c(2), c(11), c(2)+vec(0,0,-1):level=CL,pen=PENCL);
+  mode_local(#322);
+  cur_conic(#13,"FREE", on(#2000.8), on(#2000.8) + vec(0,1,0), 0.4,
+    on(#2000.10), on(#2000.10) + vec(-1, 0, 0), 0.4,
+    on(#2000.12), on(#2000.12) + vec(1, 5, 0):LEVEL=CU);
+
+  ! inner bar proximal side
+  !cur_spline(#34, "CHORD", s(12),s(90),s(81),,s(82),c(1):level=CU);
+
+  cur_conic(#34,"FREE", on(#2000.12), on(#2000.12) + vec(0,1,0), 0.3,
+    on(#2000.81),on(#2000.81)-on(#2000.12)-vec(0,0,2*toe_wt), 0.2,
+    on(#2000.82),on(#2000.82)-on(#2000.12):LEVEL=CU);
+   
+  mode_global();
+   
+  ! outer sole ground line
+  ! surface creation will fail if second mid point = first mid point
+!   cur_conic(#14,"FREE", s(17), s(17) + vec(0, 0, 1), 0.4,
+!     s(21), s(21) + vec(-1, 0, 0), 0.5,
+!     s(19),s(3)
+!   :LEVEL=CU);
+  
+  cur_conic(#14,"FREE", s(17), s(17) + vec(0, 0, 1), 0.4,
+    s(21), s(21) + vec(-1, 0, 0):LEVEL=CU);
+
+  ! construction point to ensure that tangent of next curve matches
+  poi_free(#260, s(21)+vec(-1, 0, 0):level=CL,pen=PENCL);
+
+  !csys_3p(#328, "heel triangle", s(9), s(3), s(19):level=CL,pen=PENCL);
+  csys_3p(#328, "heel triangle", s(19), s(94), s(21):level=CL,pen=PENCL);
+  mode_local(#328);
+!   cur_conic(#20,"FREE",
+!     on(#2000.21), on(#260), 0.4,
+!     on(#2000.19),on(#2000.19)+vec(-1,1,0):LEVEL=CU);
+  cur_conic(#20,"FREE",
+    on(#2000.21), on(#260), 0.5,
+    on(#2000.19),on(#2000.19)+on(#12,1.5):LEVEL=CU);
+
+  cur_conic(#21,"FREE",
+    on(#2000.19), on(#2000.19)+vec(0,1,0), 0.2,
+    on(#2000.94), on(#2000.11):LEVEL=CU);
+    
+  mode_global();
+    
+!   csys_3p(#330, "heel_triangle", s(21), c(32), s(19):level=CL,pen=PENCL);
+!   mode_local(#330);
+! 
+!   cur_conic(#14,"FREE", s(17), s(17) + vec(0, 0, 1), 0.4,
+!     s(21), s(21) + vec(-1, 0, 0), 0.401,
+!     s(19),s(19)+vec(0,0,1),0.6
+!     ,s(32),s(94)
+!     :LEVEL=CU);
+  
+  ! outer sole proximal
+  csys_3p(#323, "sole_proximal", s(16), vec(s(18).x, s(18).y, 0), s(16)+vec(0,0,-1):level=CL,pen=PENCL);
+  mode_local(#323);
+  !cur_conic(#15,"FREE", on(#1.16), on(#1.16) + vec(0,1,0), 0.4,
+  ! on(#1.20), on(#1.20) + vec(-1, 0, 0), 0.4,
+  ! on(#1.18), on(#1.18) + vec(0.5, 1, 0):LEVEL=CU);
+  
+!   cur_conic(#15,"FREE", on(#2000.16), on(#2000.16) + vec(0,1,0), 0.4,
+!    on(#2000.20), on(#2000.20) + vec(-1, 0, 0), 0.4,
+!    on(#2000.18), on(#2000.18) + vec(0, 1, 0), 0.4,
+!    on(#2000.89), on(#2000.16) - on(#2000.89)
+!   :LEVEL=CU);
+  
+  ! combination of two curves below is the same as above
+  cur_conic(#15,"FREE", on(#2000.16), on(#2000.16) + vec(0,1,0), 0.4,
+   on(#2000.20), on(#2000.20) + vec(-1, 0, 0), 0.4,
+   on(#2000.18), on(#2000.18) + vec(-1, 5, 0):LEVEL=CU);
+
+! inner sole/bar laminar junction proximal side
+!   cur_conic(#18,"FREE",
+!    on(#2000.18), on(#2000.18) + vec(0, 1, 0), 0.4,
+!    on(#2000.90), on(#2000.38)
+!   :LEVEL=CU);
+  cur_conic(#18,"FREE",
+   on(#2000.18), on(#2000.18) + vec(0, 1, 0), 0.4,
+   on(#2000.90), on(#15,1.5)
+  :LEVEL=CU);
+
+! ! outer sole/bar laminar junction proximal side
+!   cur_conic(#28,"FREE",
+!    on(#2000.38), on(#2000.38) + vec(0, 1, 0), 0.4,
+!    on(#2000.82), on(#2000.16) - on(#2000.82)
+!   :level=ME,pen=PENME);
+
+  mode_global();
+
+  ! proximal lateral cartilage  outer
+!   csys_3p(#326, "coronet", c(2), c(11), c(2)+vec(0,0,-1):level=CL,pen=PENCL);
+  mode_local(#326);
+  cur_conic(#16,"FREE",
+    on(#1000.4), on(#1000.4) + vec(-1, 0, 0), 0.6,
+    on(#2000.24), on(#2000.24) + vec(2, 5, 0)
+  :LEVEL=CU);
+  
+  ! lateral cartilage proximal inner
+  ! part posterior to cb
+  cur_conic(#43,"FREE",
+    on(#2000.24), on(#2000.24) + vec(0, 1, 0), 0.2,
+    on(#2000.50), on(#2000.50) + vec(1,0,0)
+    :LEVEL=CU);
+  ! part adjacent to cb
+  cur_conic(#45,"FREE",
+    on(#2000.50), on(#2000.50) + vec(1,0,0)
+    ,0.5, on(#2000.48), on(#2000.50)
+  :LEVEL=CU);
+  
+
+  mode_global();
+  
+  ! lateral cartilage distal outer
+!   csys_3p(#327, "cb-distal", c(1), c(9), c(1)+vec(0,0,-1):level=CL,pen=PENCL);
+  mode_local(#327);
+  cur_conic(#17,"FREE",
+    on(#1000.3), on(#1000.3) + vec(-1, 0, 0), 0.4,
+    on(#2000.78), on(#2000.78) + vec(0, 1, 0)
+    :LEVEL=CU);
+
+  ! lateral cartilage distal inner
+  ! part posterior to cb
+  cur_conic(#44,"FREE",
+    on(#2000.78), on(#2000.78) + vec(0, 1, 0),0.2, 
+    ! temporary finish at point 49 until I can sort out hole in mesh issue
+    on(#2000.49), on(#2000.78) - vec(0,0,jt)
+  :LEVEL=CU);
+  
+  ! part adjacent to cb
+  cur_conic(#46,"FREE",
+    on(#2000.49), on(#2000.78) - vec(0,0,jt), 0.5,
+    on(#2000.47), on(#2000.78) - vec(0,0,jt)
+  :LEVEL=CU);
+  
+   mode_global();
+
+  
+  ! outer bar distal (ground) side
+  ! lin_free(#30, s(5), s(22):LEVEL=CL,pen=PENCL);
+  
+  ! inner bar distal side
+  lin_free(#31, s(11), s(93):LEVEL=CL,pen=PENCL);
+  
+  ! inner sole at bar distal side
+  lin_free(#32, s(94), s(19):LEVEL=CL,pen=PENCL);
+  
+  !csys_3p(#327, "bar_wl_distal", s(11), s(22), s(19):level=CL,pen=PENCL);
+  !mode_local(#327);
+  !lin_ang(#32, s(19), 0, toe_wt:level=CU, pen=2);  
+  !mode_global();
+    
+!   ! outer bar proximal side
+!   cur_spline(#33, "CHORD", s(6),s(23),s(83),,s(92),c(1):level=CU);
+  
+!   ! inner bar proximal side
+!   cur_spline(#34, "CHORD", s(12),s(90),s(81),,s(82),c(1):level=CU);
+  
+  ! sole/bar laminar junction proximal side
+  lin_free(#36, s(18), s(89):LEVEL=CL,pen=PENCL);
+  
+  ! distal inner sole
+  csys_3p(#330, "medio-lateral-frog-tip", s(15) ,s(15)+vec(0,0,-1), s(15)+vec(0,1,0):level=CL,pen=PENCL);
+  poi_free(#331, intersect(#14, #330):level=CL,pen=PENCL);  
+ 
+  ! dirt line
+  csys_3p(#324, "dirt_line", s(15), vec(s(22).x, s(22).y, 0), s(15)+vec(0,0,-1):level=CL,pen=PENCL);
+  !csys_3p(#324, "dirt_line", s(15), vec(s(22).x, s(22).y, 0), s(3):level=CL,pen=PENCL);
+  mode_local(#324);
+  cur_conic(#22,"FREE", on(#2000.15), on(#2000.15) + vec(0,1,0), 0.2, on(#2000.22), on(#2000.37)+vec(1,0,0):LEVEL=CU);
+  ! bar/sole line
+  !cur_conic(#26,"FREE", on(#2000.15), on(#2000.15) + vec(0,1,0), 0.3, on(#2000.93), on(#2000.37)+vec(1,0,0):LEVEL=CU);
+  mode_global();
+  
+  mode_local(#324);
+  ! these curves should follow the solar surface
+  cur_conic(#26,"FREE", on(#2000.15), on(#331), 0.3, on(#2000.93), on(#2000.37)+vec(1,0,0):LEVEL=CU);
+  cur_conic(#24,"FREE", on(#2000.15), on(#331), 0.5, on(#2000.94), on(#2000.1):LEVEL=CU);
+  cur_conic(#29,"FREE", on(#2000.15), on(#331),
+   0.5, on(#2000.79), on(#2000.19),
+   0.5, on(#2000.19), on(#2000.19):LEVEL=CU);
+  mode_global();
+
+  ! proximal inner sole
+  csys_3p(#332, "medio-lateral-frog-tip-inner", s(14) ,s(14)+vec(0,0,-1), s(14)+vec(0,1,0):level=CL,pen=PENCL);
+  poi_free(#333, intersect(#15, #332):level=CL,pen=PENCL);
+  
+  ! inner dirt line
+!   csys_3p(#325, "inner_dirt_line", s(14), s(92), s(14)+vec(0,0,-1):level=CL,pen=PENCL);
+  csys_3p(#325, "inner_dirt_line", s(14), s(92), c(18)+vec(0,-jt,0):level=CL,pen=PENCL);
+  mode_local(#325);
+  cur_conic(#23,"FREE", on(#2000.14), on(#2000.14) + vec(0,1,0), 0.2, on(#2000.92), on(#2000.6):LEVEL=CU);
+  !cur_conic(#23,"FREE", on(#2000.14), on(#333), 0.6, on(#2000.92), on(#2000.6):LEVEL=CU);
+  cur_conic(#27,"FREE", on(#2000.14), on(#2000.14) + vec(0,1,0), 0.2, on(#2000.82), on(#2000.12):LEVEL=CU);
+  !cur_conic(#27,"FREE", on(#2000.14), on(#333), 0.6, on(#2000.82), on(#2000.12):LEVEL=CU);
+  mode_global();
+ 
+  
+  mode_local(#325);
+  cur_conic(#25,"FREE", on(#2000.14), on(#333), 0.4, on(#2000.90), on(#2000.18):LEVEL=CU);
+  cur_conic(#980,"FREE", on(#2000.14), on(#333),
+      0.2, on(#2000.89), on(#2000.18),
+      0.4, on(#2000.18), on(#2000.18):LEVEL=CU);
+  mode_global();
+
+
+  ! create points on plane radiating from point of frog
+  csys_3p(#190, "c10-c17-c19, ", c(10), c(17), c(19):level=CL,pen=PENCL,pen=3);
+  
+  !create points on a plane radiating from point midway between frog
+  ! apex and end of bar
+  !csys_3p(#200, "mid-plane", on(#23, 0.75) ,on(#10, 0.75), on(#11, 0.75):level=CL,pen=PENCL);
+  csys_3p(#200, "mid-plane", c(29), c(18), c(20):level=CL,pen=PENCL);
+
+/***************************************************
+  !create surfaces
+*****************************************************/    
+  ! outer wall
+  !sur_ruled(#500, #10, #11:blank=1,LEVEL=SU);
+  curves(1):=ground_line_outer;
+  curves(2):=#11;
+  !sur_ruled(#500, curves(1), curves(2):LEVEL=WL);
+  sur_curves(#500, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=WL);
+  wall_outer := #500;
+  part(#600,pointcloud("wall_outer.asc", global_ref(#500), trunc(3*UP), trunc(VP/3)),#100:LEVEL=PC);
+
+  ! inner wall
+  curves(1):=#12;
+  curves(2):=#13;
+  sur_curves(#501, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=WL);
+  wall_inner := #501;
+  part(#601,pointcloud("wall_inner.asc", global_ref(#501), trunc(UP), trunc(VP)),#100:LEVEL=PC);
+
+  ! coronet
+  sur_ruled(#508, #11, #13:LEVEL=WL);
+  sur_approx(#509, #508, "CUB_SUR", 1, 5:LEVEL=WL);
+  part(#609, pointcloud("wall_proximal.asc", global_ref(#509), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+
+  ! wall solar surface
+  sur_ruled(#510, ground_line_outer, #12:LEVEL=WL);
+  sur_approx(#511, #510, "CUB_SUR", 1, 5:LEVEL=WL);
+  part(#610, pointcloud("wall_distal.asc", global_ref(#511), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+
+  ! sole
+  ! outer edge
+  cur_comp(#261, #14, #20:level=CL,pen=PENCL);
+
+  curves(1):=#261;
+  curves(2):=#15;
+  sur_curves(#502, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=SL,pen=PENSL);
+  sole_outer := #502;
+  part(#602,pointcloud("sole_outer.asc", global_ref(#502), UP, trunc(VP/4)),#100:LEVEL=PC);
+
+  cur_comp(#262, #14, #20, #21 :level=CL,pen=PENCL);
+
+  ! distal sole surface;
+  curves(1):=#261;
+  curves(2):=#24;
+  sur_curves(#503, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=SL,pen=PENSL);
+  part(#603,pointcloud("sole_distal.asc", global_ref(#503), UP, trunc(VP/4)),#100:LEVEL=PC);
+
+  ! proximal sole surface;
+  curves(1):=#15;
+  !curves(1):=#261;
+  curves(2):=#25;
+  sur_curves(#504, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=SL,pen=PENSL);
+  part(#604,pointcloud("sole_proximal.asc", global_ref(#504), UP, trunc(VP/4)),#100:LEVEL=PC);
+
+  ! sole inner edge
+  !cur_comp(#37, #24, #32);
+  cur_comp(#37, #24, #21:level=CL,pen=PENCL);
+  !cur_comp(#38, #25, #36);
+  cur_comp(#38, #25, #18:level=CL,pen=PENCL);
+  curves(1):=#37;
+  curves(2):=#38;
+  sur_curves(#505, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=SL,pen=PENSL);
+  sole_inner:=#505;
+  part(#605,pointcloud("sole_inner.asc", global_ref(#505), UP, trunc(VP/4)),#100:LEVEL=PC);
+
+  ! create points in the outer wall to use as nodes
+  ! project a line outward from s20
+!   lin_free(#171, s(20), s(20)+vec(0,0,ch):level=CL,pen=PENCL);
+
+!   s(25) := intersect(#171, #500);
+!   s(26) := intersect(#171, #501);
+! 
+!   s(63) := intersect(#500, #206);
+!   s(64) := intersect(#501, #207);
+!   s(65) := intersect(#500, #207);
+! 
+!   s(72) := intersect(#217, #500);
+!   s(73) := intersect(#217, #501);
+!   
+!   s(74) := intersect(#218, #500);
+!   s(75) := intersect(#218, #501);
+  
+  ! project a line outward from c3
+  lin_free(#175, c(3), c(3)+vec(0,0,ch):level=CL,pen=PENCL);
+!   s(27) := intersect(#175, #500);
+!   s(28) := intersect(#175, #501);
+
+  ! project a line outward from c13
+  csys_3p(#178, "c13-c15-c14", c(13), c(15), c(14):level=CL,pen=PENCL);
+  
+!   s(79) := intersect(#178, #105);
+!   s(80) := intersect(#178, #111);
+
+  ! project a line outward from s10
+  lin_free(#176, s(10), s(10)+vec(0,0,ch):level=CL,pen=PENCL);
+!   s(29) := intersect(#176, #500);
+
+  !bar - outer
+  cur_comp(#39, #30, #22:level=CL,pen=PENCL);
+  curves(1):=#39;
+  cur_comp(#40, #33, #23:level=CL,pen=PENCL);
+  curves(2):=#40;
+  sur_curves(#507, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=BR);
+  bar_outer:=#507;
+  part(#607, pointcloud("bar_outer.asc", global_ref(#507), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+
+  !bar inner
+  !cur_comp(#41, #31, #26);
+  cur_comp(#41, #19, #26:level=CL,pen=PENCL); ! distal
+  cur_comp(#42, #34, #27:level=CL,pen=PENCL); ! proximal
+  curves(1):=#41;
+  curves(2):=#42;
+  sur_curves(#506, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=BR);
+  bar_inner:= #506;
+  part(#606, pointcloud("bar_inner.asc", global_ref(#506), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+
+  !bar proximal
+  curves(1):=#33;
+  curves(2):=#34;
+  sur_curves(#513, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=BR);
+  part(#612, pointcloud("bar_proximal.asc", global_ref(#513), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+!
+  !bar distal
+
+!   lin_free(#250, s(5), on(#30, inv_arcl(#30,arcl(#30)/100)) :level=CL,pen=PENCL);
+!   lin_free(#251, s(11), on(#31, inv_arcl(#31,arcl(#31)/100)) :level=CL,pen=PENCL);
+!   cur_comp(#252, #250:level=CL,pen=PENCL);
+!   cur_comp(#253, #251:level=CL,pen=PENCL);
+!   curves(1):=#252;
+!   curves(2):=#253;
+!   sur_curves(#512, 32, 2, curves, "ZEROTWIST_1":LEVEL=BR);
+!   part(#611, pointcloud("bar_distal.asc", global_ref(#512), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+  curves(1):=#30;
+  curves(2):=#19;
+  sur_curves(#512, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=BR);
+  part(#611, pointcloud("bar_distal.asc", global_ref(#512), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+
+  !heel between wall and bar
+  cur_comp(#254, #183:level=CL,pen=PENCL);
+  cur_comp(#255, #184:level=CL,pen=PENCL);
+  curves(1):=#254;
+  curves(2):=#255;
+  sur_curves(#514, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=HL);
+  part(#613, pointcloud("bar_heel.asc", global_ref(#514), trunc(UP/3), trunc(VP/3)), #100:LEVEL=PC);
+  part(#614, pointcloud("wall_heel.asc", global_ref(#514), trunc(UP/3), trunc(VP/3)), #100:LEVEL=PC);
+
+  !heel between lamj of wall and bar
+
+  ! create points on the wl at the heel
+  lin_free(#187, s(18), s(38):level=CL,pen=PENCL);
+  lin_free(#188, s(19), s(11):level=CL,pen=PENCL);
+
+  cur_comp(#256, #187:level=CL,pen=PENCL);
+  cur_comp(#257, #188:level=CL,pen=PENCL);
+  curves(1):=#256;
+  curves(2):=#257;
+  sur_curves(#515, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=HL);
+  part(#615, pointcloud("wall_wl_heel.asc", global_ref(#515), trunc(UP/3), trunc(VP/3)), #100:LEVEL=PC);
+  part(#616, pointcloud("bar_wl_heel.asc", global_ref(#515), trunc(UP/3), trunc(VP/3)), #100:LEVEL=PC);
+  
+  mode_local(#190);
+  lin_ang(#215, on(#1000.17), 0, ch:level=CL,pen=PENCL);
+  lin_ang(#216, on(#1000.25), 0, ch:level=CL,pen=PENCL);
+  mode_global();
+
+  ! lateral cartilage surface, outer
+  curves(1):=#16;
+  curves(2):=#17;
+  sur_curves(#516, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=LC);
+  lc_outer:=#516;
+  part(#617, pointcloud("lc_outer.asc", global_ref(lc_outer), trunc(UP/3), trunc(VP/3)), #100:LEVEL=PC);
+
+  cur_comp(#258, #43, #45:level=CL,pen=PENCL);
+  cur_comp(#259, #44, #46:level=CL,pen=PENCL);
+  curves(1):=#43;
+  curves(2):=#44;
+!    use these to extend surface to intersect with rear surface of cb
+!   curves(1):=#258;
+!   curves(2):=#259;
+  sur_curves(#517, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=LC);
+  lc_inner:=#517;
+!   part(#618, pointcloud("lc_inner.asc", global_ref(#517), trunc(UP), trunc(VP)), #100:LEVEL=PC);
+
+  ! lateral cartilage surface, all
+  sur_comp(#518, #516, #517:LEVEL=LC);
+  !lc_outer:=#518;
+  !part(#618, pointcloud("lc_outer.asc", global_ref(lc_outer), trunc(UP), trunc(VP/3)), #100:LEVEL=PC);
+ 
+
+/***************************************************
+  create node points
+*****************************************************/    
+  
+! ground plane - not really needed since we already have a curve defined
+! already defined as #140
+  !csys_3p(#700, "ground plane", s(1) ,s(1)+vec(1,0,0), s(1)+vec(0,1,0):level=CL,pen=PENCL);
+
+! create curves on solar plane
+!   cur_int(#703, wall_outer, solar_plane:level=ME,pen=PENME);
+!   csys_3p(#704, "solar_margin_element_outer", s(42), s(37), s(42)+vec(0,0,1):level=CL,pen=PENCL);
+  csys_3p(#704, "solar_margin_element_outer", s(40), s(37), s(40)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#705, wall_outer, #704:level=ME,pen=PENME);
+
+!   cur_int(#706, wall_inner, solar_plane:level=ME,pen=PENME);
+  csys_3p(#701, "solar_margin_element_inner", s(39), s(38), s(39)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#702, wall_inner, #701:level=ME,pen=PENME);
+
+  ! curves on cb distal plane
+  csys_3p(#707, "cb_distal_plane_element_inner", c(1), on(#184, 0.7), c(1)+vec(0,0,1):level=CL,pen=PENCL);
+  csys_3p(#708, "cb_distal_plane_element_outer", c(1), s(38), c(1)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#709, wall_outer, #708:level=ME,pen=PENME);
+  cur_int(#712, wall_inner, #707:level=ME,pen=PENME);
+
+!   cur_int(#715, wall_outer, cb_mid_plane:level=ME,pen=PENME);
+!   cur_int(#718, wall_inner, cb_mid_plane:level=ME,pen=PENME);
+
+!   cur_int(#721, wall_outer, cb_proximal_plane:level=ME,pen=PENME);toe_wt
+  
+  !mode_local(cb_proximal_plane);
+  lin_free(#723, s(24), s(78):level=CL,pen=PENCL);
+!   csys_3p(#724, "coronet_inner_offset", c(2)+vec(0,-toe_wt,0), c(11)+vec(0,-jt/2,0), s(12)+vec(0,-jt/4,0):level=CL,pen=PENCL);
+  csys_3p(#724, "coronet_inner_offset", c(2)+vec(0,-toe_wt,0), on(#723,0.5), c(11):level=CL,pen=PENCL);
+  cur_int(#727, wall_outer, #724:level=ME,pen=PENME);
+  cur_int(#730, wall_inner, #724:level=ME,pen=PENME);
+  !mode_global();
+
+  !heel wall outer
+  lin_free(#731, s(5), s(6):level=ME,pen=PENME);
+  !heel wall inner
+  lin_free(#732, s(11), s(12):level=ME,pen=PENME);
+  !heel wall lamj
+  lin_free(#734, s(19), s(24):level=ME,pen=PENME);
+  !lin_free(#734, on(#20,1), s(24):level=ME,pen=PENME);
+
+  ! adding a small z amount to ensure that curves #20 and #15 intersect with it
+  csys_3p(#735, "sole-heel", s(19)+vec(0,0,0.0001), s(18), s(11):level=ME,pen=PENME);
+
+
+!   csys_3p(#769, "wall_nodes-0", on(#742), on(#760,1), on(apex_front):level=ME,pen=PENME);
+!   cur_int(#772, wall_outer, #769:level=ME,pen=PENME);
+!   cur_int(#773, wall_inner, #769:level=ME,pen=PENME);
+
+  ! csys = wall_nodes-1
+  cur_int(#778, wall_outer, #775:level=ME,pen=PENME);
+  cur_int(#779, wall_inner, #775:level=ME,pen=PENME);
+
+  ! csys = wall_nodes-2
+  cur_int(#784, wall_outer, #781:level=ME,pen=PENME);
+  cur_int(#785, wall_inner, #781:level=ME,pen=PENME);
+  
+  ! csys = wall_nodes-3
+  cur_int(#1220, wall_outer, #782:level=ME,pen=PENME);
+  cur_int(#1221, wall_inner, #782:level=ME,pen=PENME);
+ 
+  ! csys = wall_nodes-4
+  cur_int(#1222, wall_outer, #783:level=ME,pen=PENME);
+  cur_int(#1223, wall_inner, #783:level=ME,pen=PENME);
+
+  ! csys = wall_nodes-5
+  cur_int(#1224, wall_outer, #1200:level=ME,pen=PENME);
+  cur_int(#1225, wall_inner, #1200:level=ME,pen=PENME);
+
+  ! create a point on the sole ground surface point corresponding to s25
+  lin_free(#787, on(#2000.25), on(#2000.26):level=CL,pen=PENCL);
+  poi_free(#790, intersect(#787, #503):level=ME,pen=PENME);
+
+  ! create curves on wall that will be the element lines, these have Xi1 aligned with an
+  ! imaginary cone
+  ! tilt the csys axis to align with #790-c(8)
+  csys_3p(#791, "heel_tilt0", on(#790), on(#1000.8), on(#790)+vec(1,0,0):level=CL,pen=PENCL);
+  mode_local(#791);
+  csys_3p(#792, "heel_tilt1", on(#790), on(#790)+vec(0,1,0), on(#790)+vec(1,0,0):level=CL,pen=PENCL);
+
+  mode_local(#792);
+  ! following angle must be around -65 or higher palmar angles won't work
+  csys_1p(#793, "heel_nodes-angle0", on(#790), 0, -65, 0:level=CL,pen=PENCL);
+!   csys_3p(#796, "heel_nodes0", on(apex_rear), intersect(#10, #793), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  csys_1p(#794, "heel_nodes-angle0-inner", on(#790), 0, -85, 0:level=CL,pen=PENCL);
+
+  csys_3p(#796, "heel_nodes0", on(apex_rear), intersect(#10, #793), on(apex_rear)-on(apex_front_ground):level=CL,pen=PENCL);
+  cur_int(#799, wall_outer, #796:level=ME,pen=PENME);
+
+  ! FIXME instead of intersect(#12, #793) use on(inv_arcl(ground line, jt))
+  !csys_3p(#802, "heel_nodes_inner0", on(apex_rear), intersect(#12, #793), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  !csys_3p(#802, "heel_nodes_inner0", on(apex_rear), intersect(#12, #793, n_intersect(#12, #793)), on(apex_rear)-on(apex_front_ground):level=CL,pen=PENCL);
+  csys_3p(#802, "heel_nodes_inner0", on(apex_rear), intersect(#12, #794, n_intersect(#12, #794)), on(apex_rear)-on(apex_front_ground):level=CL,pen=PENCL);
+  cur_int(#803, wall_inner, #802:level=ME,pen=PENME);
+  !cur_int(#819, sole_outer, #793:level=ME,pen=PENCL);
+  cur_int(#819, sole_outer, #802:level=ME,pen=PENME);
+
+  lin_free(#825, startp(#803), on(#1000.4):level=ME,pen=PENME);
+
+  csys_1p(#805, "heel_nodes-angle1", on(#790), 0, -35, 0:level=CL,pen=PENCL);
+!    csys_3p(#808, "heel_nodes_outer1", on(apex_rear), intersect(#10, #805), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  csys_3p(#808, "heel_nodes_outer1", on(apex_rear), intersect(#10, #805, n_intersect(#10, #805)), on(apex_rear)-on(apex_front_ground):level=CL,pen=PENCL);
+  cur_int(#811, wall_outer, #808:level=ME,pen=PENME);
+
+!   poi_free(#1250, on(#10,1.33333):LEVEL=CL,pen=PENCL);
+!   poi_free(#1251, on(#10,1.66666):LEVEL=CL,pen=PENCL);
+
+  csys_3p(#814, "heel_nodes_inner1", on(apex_rear), intersect(#12, #805, n_intersect(#12, #805)), on(apex_rear)-on(apex_front_ground):level=CL,pen=PENCL);
+  cur_int(#817, wall_inner, #814:level=ME,pen=PENME);
+
+!   csys_3p(#818, "heel_nodes_sole1", on(apex_rear), intersect(#20, #805), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  poi_free(#1240, intersect(#261, #805):level=CL, pen=PENCL);
+
+  poi_free(#1241, on(#261,1.33333):LEVEL=CL,pen=PENCL);
+  poi_free(#1242, on(#261,1.66666):LEVEL=CL,pen=PENCL);
+
+  csys_3p(#818, "heel_nodes_sole1", on(apex_rear), intersect(#261, #805), on(apex_rear)-on(apex_front_ground):level=CL, pen=PENCL);
+
+  csys_3p(#804, "lc_nodes_angle_1", on(#790), on(#17,0.3), on(#16,0.3):level=CL, pen=PENCL);
+
+
+  cur_int(#821, lc_outer, #804:level=ME,pen=PENME);
+!   cur_int(#821, lc_outer, #793:level=ME,pen=PENCL);
+
+  cur_int(#849, sole_outer, #804:level=ME,pen=PENME);
+
+  ! mesh line for anterior segment of lc mesh
+  lin_free(#824, endp(#821), on(#1000.8):level=ME,pen=PENME);
+
+!mode_global();
+  
+  ! create curves on bar that will be the element lines, these have Xi1 aligned with an
+  ! imaginary cone#20
+  !csys_1p(#820, "bar_nodes-angle0", on(#790), 0, 10, 0:level=ME,pen=PENME);
+  ! bar_nodes-angle0 is used to intersect the inner lateral cartilage. #790 is the apex point
+  ! on the sole, #1000.8 is the rear proximal inner cb point, #43 is the  proximal lc line
+  !csys_3p(#820, "bar_nodes-angle0", on(#790), on(#1000.8), on(#43, 0.7):level=ME,pen=PENME);
+  csys_3p(#820, "bar_nodes-angle0", on(#790), on(#1000.8), on(#2000.50):level=CL,pen=PENCL);
+!   csys_3p(#823, "bar_nodes0", on(apex_rear), intersect(#30, #820), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+!   csys_3p(#823, "bar_nodes0", on(apex_rear), on(#30, 0.4), on(apex_rear)+vec(0,0,1):level=ME,pen=PENCL);
+  x := inv_arcl(#30, arcl(#30)*0.4);
+  csys_3p(#823, "bar_nodes0", on(apex_rear), on(#30, x), on(apex_rear)+vec(0,0,1):level=ME,pen=PENCL);
+  cur_int(#826, bar_outer, #823:level=ME,pen=PENCL);
+
+  csys_3p(#827, "bar_outer_distal", on(#826,0), on(#826,1), on(#790):level=CL,pen=PENCL);
+  poi_free(#830, intersect(#41, #827):level=CP,pen=PENCL);
+  
+  !csys_3p(#839, "bar_nodes_inner0", on(apex_rear), on(#19, 0.5), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  !csys_3p(#839, "bar_nodes_inner0", on(apex_rear), on(#830), on(apex_rear)+vec(0,0,1):level=CP,pen=PENCL);
+
+  !cur_int(#842, bar_inner, #839:level=ME,pen=PENME);
+  cur_int(#842, bar_inner, #827:level=ME,pen=PENME);
+  
+  csys_3p(#831, "bar_inner_distal", on(#826,1), on(#1000.8), on(#790):level=CL,pen=PENCL);
+  
+  csys_1p(#829, "bar_nodes-angle1", on(#790), 0, 80, 0:level=CL,pen=PENCL);
+  csys_3p(#832, "bar_nodes1", on(apex_rear), intersect(#39, #829), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#836, bar_outer, #832:level=ME,pen=PENME);
+
+  !csys_3p(#845, "bar_nodes_inner1", on(apex_rear), intersect(#41, #829), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  csys_3p(#845, "bar_nodes_inner1", on(apex_rear),  intersect(#41, #829), on(apex_rear)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#848, bar_inner, #845:level=ME,pen=PENME);
+  
+  csys_3p(#834, "lc_nodes_inner1", on(#790),  intersect(#41, #829), on(#1000.8):level=CL,pen=PENCL);
+
+  mode_global();
+
+  ! plane to intersect with inner lateral cartilage lines
+  csys_3p(#822, "lc_nodes_0", on(#790), on(#1000.8), on(#2000.81):level=CL,pen=PENCL);
+  !cur_int(#833, lc_inner, #834:level=ME,pen=PENME);
+
+
+! ! outer sole/bar laminar junlevel=CP,pen=PENCLction proximal side
+!   cur_conic(#28,"FREE",
+!    on(#2000.38), on(#2000.38) + vec(0, 1, 0), 0.4,
+!    on(#2000.82), on(#2000.16) - on(#2000.82)
+!   :level=ME,pen=PENME);
+  csys_3p(#851, "bar_proximal_solar_margin_inner", on(#2000.38), on(#2000.82), on(#2000.38)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#854, bar_inner, #851:level=ME,pen=PENME);
+
+  csys_3p(#857, "bar_proximal_solar_margin_outer", s(92), s(37), s(92)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#860, bar_outer, #857:level=ME,pen=PENME);
+  
+
+  curves(1) := #863;!cb proximal outer edge
+  curves(2) := #866;! cb distal outer edge
+  sur_curves(#872, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=ME,pen=PENME,blank=0);
+  cb_outer:=#872;
+
+  ! cb outer proximal offset element curve
+!   csys_3p(#725, "cb_coronet_inner_offset", c(2)+vec(0,-toe_wt,0), c(11)+vec(0,-jt/2,0), c(4)+vec(0,-jt/2,0):level=CL,pen=PENCL);
+  cur_int(#873, #872, #724:LEVEL=ME,pen=PENME);
+
+  ! lateral cartilage outer offset element curve 
+  cur_int(#874, #516, #724:LEVEL=ME,pen=PENME);
+  
+
+  ! create a constr line at the last uncollapsed element of the bar
+  ! to put points on for constructing other bar Xi2 lines
+  poi_free(#896, intersect(#860, #832):level=ME,pen=PENME);
+  poi_free(#899, intersect(#33, #832):level=ME,pen=PENME);
+  
+  lin_free(#881, on(#896), on(#899):level=CL,pen=PENCL);
+
+  !create points referred to in above comment
+  poi_free(#884, on(#881, 0.3):level=ME,pen=PENME);
+  poi_free(#887, on(#881, 0.6):level=ME,pen=PENME);
+
+  ! intersect cb_distal_plane_element_outer and heel
+  poi_free(#890, intersect(#708, #731):level=ME,pen=PENME);
+
+! outer bar cb distal plane element line
+  csys_3p(#875, "cb_distal_plane_element_outer_bar", on(#890), on(#884), on(#890)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#878, bar_outer, #875:level=ME,pen=PENME);
+
+! coronet_offset_element_outer_bar
+  poi_free(#893, intersect(#724, #731):level=ME,pen=PENME);
+  csys_3p(#901, "coronet_offset_element_outer_bar", on(#893), on(#887), on(#893)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#904, bar_outer, #901:level=ME,pen=PENME);
+
+
+  poi_free(#907, intersect(#854, #832):level=ME,pen=PENME);
+  poi_free(#910, intersect(#34, #832):level=ME,pen=PENME);
+  
+  lin_free(#913, on(#907), on(#910):level=CL,pen=PENCL);
+
+  !create points referred to in above comment
+  poi_free(#917, on(#913, 0.3):level=ME,pen=PENME);
+  poi_free(#920, on(#913, 0.6):level=ME,pen=PENME);
+  
+  ! coronet_offset_element_inner_bar
+  poi_free(#923, intersect(#724, #732):level=ME,pen=PENME);
+  csys_3p(#926, "coronet_offset_element_inner_bar", on(#923), on(#920), on(#923)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#929, bar_inner, #926:level=ME,pen=PENME);
+
+
+! inner bar cb distal plane element line
+  poi_free(#932, intersect(#707, #732):level=ME,pen=PENME);
+  
+  csys_3p(#936, "cb_distal_plane_element_inner_bar", on(#932), on(#917), on(#932)+vec(0,0,1):level=CL,pen=PENCL);
+  cur_int(#939, bar_inner, #936:level=ME,pen=PENME);
+
+
+  ! cb rear/inner surface
+  curves(1) := #942;
+  curves(2) := #946;
+  sur_curves(#949, 4, 2, curves, "ZEROTWIST_1":LEVEL=ME,pen=PENME,blank=1);
+  cb_inner:=#949;
+
+  ! curve through mid plane of rear surface
+  cur_int(#952, #949, cb_mid_plane:LEVEL=ME,pen=PENME);
+
+  ! distal sole - lateral cartilage curve
+  cur_comp(#955, #14, #20:LEVEL=ME,pen=PENME);
+
+  !heel collapsed element apex axis
+  lin_free(#958, on(#2000.26), on(#1000.8):level=CL,pen=PENCL);
+
+  ! points on inner lateral cartilage
+  poi_free(#961, intersect(#796, #43):LEVEL=ME,pen=PENME);
+  poi_free(#964, intersect(#796, #44):LEVEL=ME,pen=PENME);
+
+  ! coronet_offset_element inner lateral cartilage
+  ! mid point at rear of lateral cartilage
+   poi_free(#967, intersect(#734, #874):LEVEL=ME,pen=PENME);
+   !csys_3p(#970, "lc-mid-plane", on(#967), on(#1000.28), on(#1000.13):level=CL,pen=PENCL);
+   csys_3p(#970, "lc-mid-plane", on(#967), on(#1000.7),
+     vec(0.5*(s(50).x+s(49).x),0.5*(s(50).y+s(49).y),0.5*(s(50).z+s(49).z)):level=CL,pen=PENCL);
+  !csys_3p(#970, "lc-mid-plane", vec(s(50).x,0.5*(s(50).y+s(49).y),s(50).z), on(#1000.28), on(#1000.13):level=CL,pen=PENCL);
+!    use these to extend surface to intersect with rear surface of cb
+  curves(1):=#258;
+  curves(2):=#259;
+  sur_curves(#519, NSEG, 2, curves, "ZEROTWIST_1":LEVEL=LC);
+  cur_int(#973, #519, #970:LEVEL=ME,pen=PENME);
+
+  !lateral cartilage inner curves
+  !
+  cur_comp(#979, #43, #45:LEVEL=ME,pen=PENME);
+  cur_comp(#982, #44, #46:LEVEL=ME,pen=PENME);
+
+  ! cb end plane
+  csys_3p(#976, "cb-end-plane", c(3), c(9), c(10):level=CL,pen=PENCL);
+
+  ! cb outer & lc outer proximal offset element curve
+  cur_comp(#977, #873, #874:LEVEL=ME,pen=PENME);
+ 
+
+! curves on outer wall
+  mcurve(0):=#10;!ground line
+  mcurve(1):=#705;
+  mcurve(2):=#709;
+  mcurve(3):=#727;
+  mcurve(4):=#11; !coronet
+  
+  ! curves on inner wall
+  mcurve(5):=#12;
+  mcurve(6):=#702;
+  mcurve(7):=#712;
+  mcurve(8):=#730;
+  mcurve(9):=#13;
+  
+  !curves on outer sole and cb surface
+  mcurve(10):=#955;
+  mcurve(11):=#15;
+  mcurve(12):=#866;
+  mcurve(13):=#873;
+  mcurve(14):=#863;
+
+  !curves on sole at inner side
+  !mcurve(15):=#22;
+  mcurve(15):=#39;
+  !mcurve(16):=#23;
+  mcurve(16):=#40;
+  
+  !curves on inner cb surface
+  mcurve(17):=#942;
+  mcurve(18):=#952;
+  mcurve(19):=#946;
+
+  !curves on sole at inner side - bar elements
+  !mcurve(20):=#26;
+  mcurve(20):=#41;
+  !mcurve(21):=#27;
+  mcurve(21):=#42;
+  !mcurve(22):=#24;
+  mcurve(22):=#37;
+  !mcurve(23):=#25;
+  mcurve(23):=#38;
+
+  !lateral cartilage outer
+  mcurve(24):=#17;
+  mcurve(25):=#874;
+  mcurve(26):=#16;
+  
+!   !lateral cartilage inner
+!   mcurve(24):=#17;
+!   mcurve(25):=#16;
+  
+  mplane(0):=sagittal_plane;
+  mplane(1):=#781;
+  mplane(2):=#775;
+
+  nnode:=0;
+  
+  ! nodes on front part
+
+  !sagittal plane
+  ifirst:=0;
+  ilast:=19;
+  nplanes:=1; 
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i),mplane(j));
+      ! correct small errors in z
+      n(nnode).z:=0;
+    endfor;
+  endfor;
+  
+  ifirst:=0;
+  ilast:=23;
+  nplanes:=3; ! note that j starts at 1 so mplane(0) is omitted
+  for i:=ifirst to ilast do
+    for j:=1 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect( mcurve(i), mplane(j));
+    endfor;
+  endfor;
+
+  ! nodes on heel quarters
+  ! there are different planes intersecting the outer and inner walls
+
+  ! outer wall
+  ifirst:=0;
+  ilast:=4;
+  nplanes:=3;
+  mplane(0):=#796; 
+  mplane(1):=#808;
+  mplane(2):=#731; ! actually a line
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i),mplane(j), n_intersect(mcurve(i),mplane(j)));
+    endfor;
+  endfor;
+  
+  ! inner wall
+  ifirst:=5;
+  ilast:=9;
+  nplanes:=3;
+  mplane(0):=#802;
+  mplane(1):=#814;
+  mplane(2):=#732; ! actually a line
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i),mplane(j), n_intersect(mcurve(i),mplane(j)));
+    endfor;
+  endfor;
+
+  ! outer sole
+  ifirst:=10;
+  ilast:=11;
+  !mplane(0):=#793;
+  mplane(0):=#802;
+  !mplane(1):=#804;
+  mplane(1):=#818;
+  mplane(2):=#735;
+  nplanes:=3;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      ! FIXME: split the curve into parts so this isn't required
+      ! select last intersection if there are more than one, this is what the n_intersect does
+      n(nnode):=intersect(mcurve(i),mplane(j),n_intersect(mcurve(i),mplane(j)));
+      !n(nnode):=intersect(mplane(j),mcurve(i));
+    endfor;
+  endfor;
+
+  ! outer lateral cartilage
+  ifirst:=24;
+  ilast:=26;
+  !mplane(0):=#818;
+  mplane(0):=#804;
+  mplane(1):=#734; ! actually a line
+  
+!   mplane(0):=#814;
+!   mplane(1):=#732; ! actually a line
+
+  nplanes:=2;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i), mplane(j),n_intersect(mcurve(i),mplane(j)));
+    endfor;
+  endfor;
+ 
+  ! apex of collapsed elements at heel
+  ! distal sole
+  nnode:=nnode+1;
+  n(nnode):=on(#790);
+
+  ! proximal sole
+  nnode:=nnode+1;
+  n(nnode):= intersect(#504, #958);
+
+  ! nodes on rear end of cb
+  n(nnode+1):=c(3);
+!   n(nnode+2):=c(13);
+  n(nnode+2):=intersect(#977, #976);
+  n(nnode+3):=c(4);
+  n(nnode+4):=c(7);
+  n(nnode+5):=c(15);
+  n(nnode+6):=c(8);
+  nnode:=nnode+6;
+
+  ! outer bar
+  mcurve(27):=#39;
+  mcurve(28):=#860;
+  mcurve(29):=#878;
+  mcurve(30):=#904;
+  mcurve(31):=#33;
+  ifirst:=27;
+  ilast:=31;
+  mplane(0):=#823;
+  mplane(1):=#832;
+  nplanes:=2;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i),mplane(j));
+    endfor;
+  endfor;
+
+  ! inner bar
+  mcurve(32):=#41;
+  mcurve(33):=#854;
+  mcurve(34):=#939;
+  mcurve(35):=#929;
+  mcurve(36):=#34;
+  ifirst:=32;
+  ilast:=36;
+  !mplane(0):=#839;
+  mplane(0):=#827;
+  !mplane(1):=#845;
+  mplane(1):=#834;
+  nplanes:=2;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i),mplane(j));
+    endfor;
+  endfor;
+
+  ! inner lateral cartilage
+  mcurve(37):=#37;
+  mcurve(38):=#18;
+  mcurve(39):=#982;
+  mcurve(40):=#973;
+  mcurve(41):=#979;
+  ifirst:=37;
+  ilast:=41;
+  mplane(0):=#827;
+  !mplane(1):=#845;
+  mplane(1):=#834;
+  nplanes:=2;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+      nnode:=nnode+1;
+      n(nnode):=intersect(mcurve(i),mplane(j));
+    endfor;
+  endfor;
+
+  ! points on innermost sole curves
+  mcurve(42):=#29; ! distal
+  mcurve(43):=#980; ! proximal
+  ifirst:=42;
+  ilast:=43;
+  mplane(0):=#781;
+  mplane(1):=#775;
+  nplanes:=2;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+       nnode:=nnode+1;
+       n(nnode):=intersect(mplane(j), mcurve(i));
+    endfor;
+  endfor;
+
+  ! create nodes for scaffold elements offset from sagittal plane
+!   r(1):=vec(0,0,-4*toe_wt);
+!   !csys_3p(#995, "sagittal-offset", s(1)+r(1), s(2)+r(2), s(13)+r(1):level=CL,pen=PENCL);
+! 
+!   for i:=1 to 20 do
+!     !poi_free(#998, n(i)+r(1):level=CL,pen=PENCL);
+!     nnode:=nnode+1;
+!     !n(nnode):=on(#998);
+!     n(nnode):=n(i)+r(1);
+!   endfor;
+  
+
+  ! extra nodes on front part, putting these at the end so I don't have to
+  ! recreate the whole mesh or renumber any existing nodes
+  mplane(0):=#1200;
+  mplane(1):=#783;
+  mplane(2):=#782;
+
+  ifirst:=0;
+  ilast:=23;
+  nplanes:=5; ! note that j starts at 1 so mplane(0) is omitted
+  for i:=ifirst to ilast do
+    for j:=0 to 2 do
+      nnode:=nnode+1;
+      n(nnode):=intersect( mcurve(i), mplane(j));
+    endfor;
+  endfor;
+
+  ! points on innermost sole curves
+  mcurve(42):=#29; ! distal
+  mcurve(43):=#980; ! proximal
+  ifirst:=42;
+  ilast:=43;
+  
+  nplanes:=3;
+  for i:=ifirst to ilast do
+    for j:=0 to nplanes-1 do
+       nnode:=nnode+1;
+       n(nnode):=intersect(mplane(j), mcurve(i));
+    endfor;
+  endfor;
+
+
+  ! curves for rolled wall distal surface
+  ! FIXME: this approach won't work very well, it would be better to create longitudinal lines
+!   cur_conic(#1212,"FREE", n(168), n(168) + vec(-1, 0, 0), 0.6,
+!     n(153), n(153)+vec(0,-1,0) :LEVEL=CU);
+!   
+!   cur_conic(#1214,"FREE", n(169), n(169) + vec(-1, 0, 0), 0.6,
+!     n(154), n(154)+vec(0,-1,0) :LEVEL=CU);
+! 
+!   cur_conic(#1216,"FREE", n(170), n(170) + vec(-1, 0, 0), 0.6,
+!     n(155), n(155)+vec(0,-1,0) :LEVEL=CU);
+
+  ! create nodes for scaffold elements offset from sagittal plane
+  ! mirror in x-y plane from the first set of wall elements
+  !for i:=21 to 60 step 2 do
+  
+  for i:=153 to 153+60 step 3 do ! mirror every 3rd node starting at 153
+    !poi_free(#998, n(i)+r(1):level=CL,pen=PENCL);
+    nnode:=nnode+1;
+    !n(nnode):=on(#998);
+    n(nnode):=vec(n(i).x, n(i).y, -n(i).z);
+  endfor;
+
+! adjust position of node 141
+  csys_3p(#985, "node 141 adjustment", n(131), n(137), n(143):level=CL,pen=PENCL);
+  n(141):=intersect(#985, #18);
+
+! adjust position of nodes
+!   n(144):=intersect(#822, #982);
+!   n(146):=intersect(#822, #973);
+!   n(148):=intersect(#822, #979 );
+
+! adjust nodes that were incorrectly placed
+  n(101):=s(19);
+  n(104):=s(18);
+
+! create node points and labels
+  for i:=1 to nnode do
+    poi_free(#3000, n(i):level=ME,pen=PENME);
+    text(#3001,n(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,""+str(i,1,0):level=ME,pen=PENME,TSIZE=1);
+  endfor;
+
+  !lst_ini("nodes");
+  ! write nodes to a file
+  open(nodef, "W", "nodes.txt"); ! file gets written in the dir you started varkon in
+  for i:=1 to nnode do
+    nstr:=str(n(i).x)+" "+str(n(i).y)+" "+str(n(i).z)+" ";
+    outstr(nodef, nstr);
+    outlin(nodef);
+    !lst_lin(nstr);
+  endfor;
+  close(nodef);
+  !lst_exi();
+
+  !poi_free(#983, intersect(#775, #980):level=ME,pen=PENME);
+  !poi_free(#986, intersect(#775, #29):level=ME,pen=PENME);
+
+  ! define point clouds for laminar junction fibres
+
+  ! need to create an inner and an outer surface and then create the same
+  ! number of points on each, these will define a vector
+
+!   !lamj inner surface
+!   cur_comp(#983, #863, #16:level=CL,pen=PENCL);
+!   curves(1):=#983;
+!   curves(2):=#15;
+!   sur_curves(#986, 32, 2, curves, "ZEROTWIST_1":level=CL,pen=PENCL);
+! 
+!   !lamj outer surface
+!   curves(1):=#13;
+!   curves(2):=#702;
+!   sur_curves(#989, 32, 2, curves, "ZEROTWIST_1":level=CL,pen=PENCL);
+!   
+!   part(#992, vectorcloud("lamj.asc",global_ref(#986), global_ref(#989), trunc(UP), trunc(VP/3)),#100:LEVEL=VC);
+
+  ! returned parameters for dimensions on ground plane
+  toe_point:=s(1);
+  widest_point:=s(3);
+  heel_point:=s(5);
+
+endmodule

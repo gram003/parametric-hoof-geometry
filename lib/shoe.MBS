@@ -1,0 +1,112 @@
+local geometry module shoe(
+vector toe > "location of toe";
+vector widest >"location of widest point";
+vector heel >"location of heel";
+float t := 12 >"thickness";
+float w := 15 >"width"
+);
+
+vector n(100); ! node points
+int nnode;
+int i,j;
+int npoints;
+int nelements;
+int PENSH;
+vector shoe_toe;
+
+! vars for node file
+FILE nodef;
+string nstr*132;
+
+
+BEGINMODULE
+  PENSH:=2;
+  ! draw lines between input point to check that they are in the right places
+!   lin_free(#10, toe, heel);
+!   lin_free(#20, toe, widest);
+!   lin_free(#30, widest, heel);
+
+!   n(1):=toe+vec(-x,-t,0);
+!   n(2):=toe+vec(heel.x-toe.x+x,-t,0);
+!   n(3):=n(1)+vec(0,t,0);
+!   n(4):=n(2)+vec(0,t,0);
+!   n(5):=n(1)+vec(0,0,x+widest.z);
+!   n(6):=n(2)+vec(0,0,x+widest.z);
+!   n(7):=n(3)+vec(0,0,x+widest.z);
+!   n(8):=n(4)+vec(0,0,x+widest.z);
+
+!   nnode:=8;
+!   for i:=1 to nnode do
+!     poi_free(#100, n(i));
+!     text(#101,n(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,""+str(i,1,0):TSIZE=5);
+!   endfor;
+
+  ! add an offset so the shoe is larger than the hoof
+  shoe_toe:=toe+vec(-1,0,0);
+  ! shoe outer surface
+  widest:=widest+vec(0,0,1);
+  heel:=heel+vec(2,0,w/2);
+  cur_conic(#10, "FREE", shoe_toe, shoe_toe+vec(0,0,1), 0.4, widest, widest+vec(-1,0,0),
+    0.5, heel, heel+vec(0,0,1):PEN=PENSH);
+
+  ! shoe inner surface
+  cur_conic(#20, "FREE", toe+vec(1.8*w,0,0), toe+vec(1.8*w,0,1), 0.4, widest+vec(0,0,-w), widest+vec(-1,0,-w),
+    0.5, heel+vec(0,0,-w), heel+vec(0,0,-1):PEN=PENSH);
+
+  csys_3p(#30, "ground-xy", toe+vec(0,-t,0), toe+vec(1,-t,0), toe+vec(0,-t,-1));
+  mode_local(#30);
+  cur_offs(#40, #10, 0:PEN=PENSH);
+  cur_offs(#50, #20, 0:PEN=PENSH);
+  mode_global();
+
+
+  nelements:=10;
+  j:=0;
+  for i:=0 to nelements do
+    j:=j+1;
+    n(j):= on(#50, inv_arcl(#50,i*(arcl(#50)/nelements)));
+    poi_free(#60, n(j):PEN=PENSH);
+    j:=j+1;
+    n(j):= on(#40, inv_arcl(#40,i*(arcl(#40)/nelements)));
+    poi_free(#70, n(j):PEN=PENSH);
+    j:=j+1;
+    n(j):= on(#20, inv_arcl(#20,i*(arcl(#20)/nelements)));
+    poi_free(#80, n(j):PEN=PENSH);
+    j:=j+1;
+    n(j):= on(#10, inv_arcl(#10,i*(arcl(#10)/nelements)));
+    poi_free(#90, n(j):PEN=PENSH);
+!   nnode:=nnode+1;
+!   n(nnode):=intersect(mplane(j), mcurve(i));
+  endfor;
+  
+  ! node at rear on sagittal line
+  j:=j+1;
+  n(j):=heel+vec(0,-t,0);
+  n(j).z:=0;
+  poi_free(#100, n(j):pen=PENSH);
+  
+  for i:=0 to nelements-1 do
+    j:=j+1;
+    n(j):=n(j-1);
+    n(j).x:=n(j).x-t/2;
+    poi_free(#101, n(j):pen=PENSH);
+  endfor;
+  
+  nnode:=j;
+
+  ! add text to nodes
+  for i:=1 to nnode do
+    text(#1001,n(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,""+str(i,1,0):pen=PENSH,TSIZE=1);
+  endfor;
+
+  ! create node file
+  open(nodef, "W", "shoenodes.txt"); ! file gets written in the dir you started varkon in
+  for i:=1 to nnode do
+    nstr:=str(n(i).x)+" "+str(n(i).y)+" "+str(n(i).z)+" ";
+    outstr(nodef, nstr);
+    outlin(nodef);
+    lst_lin(nstr);
+  endfor;
+  close(nodef);
+
+ENDMODULE

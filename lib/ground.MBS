@@ -1,0 +1,49 @@
+local geometry module ground(
+vector toe > "location of toe";
+vector widest >"location of widest point";
+vector heel >"location of heel";
+float t := 12 >"thickness";
+float x := 20  >"offset"
+);
+
+vector n(8); ! node points
+int nnode;
+int i;
+
+! vars for node file
+FILE nodef;
+string nstr*132;
+
+
+BEGINMODULE
+  ! draw lines between input point to check that they are in the right places
+!   lin_free(#10, toe, heel);
+!   lin_free(#20, toe, widest);
+!   lin_free(#30, widest, heel);
+
+  n(1):=toe+vec(-x,-t,0);
+  n(2):=toe+vec(heel.x-toe.x+x,-t,0);
+  n(3):=n(1)+vec(0,t,0);
+  n(4):=n(2)+vec(0,t,0);
+  n(5):=n(1)+vec(0,0,x+widest.z);
+  n(6):=n(2)+vec(0,0,x+widest.z);
+  n(7):=n(3)+vec(0,0,x+widest.z);
+  n(8):=n(4)+vec(0,0,x+widest.z);
+
+  nnode:=8;
+  for i:=1 to nnode do
+    poi_free(#100, n(i));
+    text(#101,n(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,""+str(i,1,0):TSIZE=5);
+  endfor;
+
+  open(nodef, "W", "groundnodes.txt"); ! file gets written in the dir you started varkon in
+  for i:=1 to nnode do
+    nstr:=str(n(i).x)+" "+str(n(i).y)+" "+str(n(i).z)+" ";
+    outstr(nodef, nstr);
+    outlin(nodef);
+    lst_lin(nstr);
+  endfor;
+  close(nodef);
+
+
+ENDMODULE

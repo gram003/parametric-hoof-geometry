@@ -1,0 +1,82 @@
+BASIC MODULE hoof();
+
+FLOAT ca; 
+FLOAT palmar_angle; 
+FLOAT coronet_angle; 
+FLOAT cb_wp; 
+FLOAT cb_wd; 
+FLOAT cb_wpp; 
+FLOAT cb_wpd; 
+FLOAT heel_angle_back; 
+FLOAT heel_angle_side; 
+FLOAT heel_width; 
+INT cp; 
+INT wp; 
+FLOAT pb_tip_to_grnd; 
+FLOAT sole_thickness; 
+FLOAT toe_wall_thickness; 
+FLOAT quarter_wall_thickness; 
+FLOAT heel_wall_thickness; 
+FLOAT lamj_thickness; 
+FLOAT grnd_thickness; 
+FLOAT grnd_offset; 
+FLOAT heel_contraction; 
+FLOAT p3_contraction; 
+FLOAT underrun; 
+FLOAT scoop; 
+INT bar_on_ground; 
+INT toe_roll; 
+VECTOR toe_point; 
+VECTOR widest_point; 
+VECTOR heel_point; 
+FLOAT shoe_thickness; 
+FLOAT shoe_width; 
+FLOAT sole_relief; 
+
+BEGINMODULE
+
+  palmar_angle:=0;
+  coronet_angle:=30 - palmar_angle;
+  ca:=45;
+  p3_contraction:=0;
+  cb_wd:=50 - p3_contraction;
+  cb_wp:=cb_wd - 2;
+  cb_wpp:=6;
+  cb_wpd:=7;
+  heel_angle_back:=75;
+  underrun:=0;
+  heel_angle_side:=ca + palmar_angle - underrun;
+  heel_contraction:=10;
+  heel_width:=50 - heel_contraction;
+  pb_tip_to_grnd:=18;
+  sole_thickness:=10 + 2.0*cb_wd*sin(palmar_angle);
+  sole_relief:=0.5;
+  toe_wall_thickness:=11.5;
+  quarter_wall_thickness:=8;
+  heel_wall_thickness:=6.5;
+  lamj_thickness:=4;
+  bar_on_ground:=0;
+  scoop:=0;
+  toe_roll:=0;
+  grnd_thickness:=50;
+  grnd_offset:=20;
+  shoe_thickness:=12;
+  shoe_width:=15;
+  cre_color(10, 150, 150, 150);
+  cre_color(11, 200, 200, 200);
+  csys_3p(#1,"origin", vec(0, 0, 0), vec(1, 0, 0), vec(0, 1, 0):BLANK=1);
+  part(#3,cb(ca, palmar_angle, 29, cb_wp, cb_wd, cb_wpp, cb_wpd, cp),#1:PEN=
+    11,BLANK=0);
+  part(#4,wall2(#3, cp, toe_wall_thickness, quarter_wall_thickness, 
+    heel_wall_thickness, lamj_thickness, pb_tip_to_grnd, sole_thickness, 
+    heel_width, heel_angle_side, heel_angle_back, coronet_angle, 
+    bar_on_ground, scoop, toe_roll, sole_relief, wp, toe_point, widest_point
+    , heel_point),#1:PEN=10,BLANK=0);
+  part(#6,vcl(10.0, 1.0, 0),#1:BLANK=0);
+  part(#7,shoe(toe_point, widest_point, heel_point, shoe_thickness, 
+    shoe_width),#1:BLANK=1);
+  part(#8,ground(toe_point, widest_point, heel_point, grnd_thickness, 
+    grnd_offset),#1:BLANK=1);
+  mode_global();
+
+ENDMODULE

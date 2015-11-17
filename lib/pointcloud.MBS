@@ -1,0 +1,65 @@
+global geometry module pointcloud(
+string filename*132;
+ref sur > "surface"; ! must be a bicubic patch surface
+int nu > "number of points in u";
+int nv > "number of points in v"
+);
+
+constant int BL=100; ! base level
+constant int CP=BL+1; ! construction points
+constant int CL=BL+2; ! construction lines
+constant int CU=BL+3; ! curves
+constant int SU=BL+5; ! surfaces
+
+int i,j; !counter
+int data, data_u, data_v;
+float u,v;
+float len_u,len_v;
+vector uv;
+vector d;
+
+FILE f;
+string s*132;
+
+beginmodule  
+  getsurh (sur, "SUR_TYPE", data);
+  if(1<>data) then
+    exit("pointcloud: surface must be bicubic");
+  endif;
+   
+  getsurh (sur, "NPATU", data_u);
+  getsurh (sur, "NPATV", data_v);
+  
+/*
+In order to spread the points out evenly create a an isoparametric curve
+at u=0, measure it's length and then find out the parameter values for evenly
+spaced intervals along this length.
+*/
+
+  cur_iso(#100, sur, "V", 0, 0, data_u);
+  cur_iso(#101, sur, "U", 0, 0, data_v);
+  
+  len_u:=arcl(#100);
+  len_v:=arcl(#101);
+  
+  open(f, "W", filename);
+
+  for i:=0 to nu do
+  
+    u:=inv_arcl(#100, i*len_u/nu);
+
+    for j:=0 to nv do
+      v:=inv_arcl(#101, j*len_v/nv);
+      uv := vec(u,v,0);
+      d := on(sur, uv);
+      poi_free(#1, d);
+      s:=str(d.x)+" "+str(d.y)+" "+str(d.z);
+      outstr(f, s);
+      outlin(f);
+    endfor;
+    
+  endfor;
+  
+  close(f);
+  
+endmodule

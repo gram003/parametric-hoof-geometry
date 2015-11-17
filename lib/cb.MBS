@@ -1,0 +1,212 @@
+local geometry module cb(
+FLOAT da > "coffin bone dorsal angle";
+float pa > "coffin bone palmar angle";
+float ht > "coffin bone height to top of laminar junction";
+float wp > "coffin bone width at proximal outer rear edge";
+float wd > "coffin bone width at distal outer rear edge";
+float pp > "thickness of palmar process at proximal edge"; 
+float pd > "thickness of palmar process at distal edge";
+VAR int numpoints ! number of points will be returned
+);
+
+constant int BL=10; ! base level
+constant int CP=BL+1; ! construction points
+constant int CL=BL+2; ! construction lines
+constant int CU=BL+3; ! curves
+constant int SU=BL+5; ! surfaces
+constant int PC=BL+6; ! point cloud
+ 
+constant int NP=30;
+constant int PENCP = 2;
+constant int PENCL = 3;
+
+vector v(NP); !points
+
+float phi;
+float theta(3); ! angles
+float sinda, cosda, tanda; !sin, cos and tan of dorsal angle
+int i; !counter
+
+ref curves(2); ! curve array for sur_curves
+
+beginmodule
+
+  blank_level(CP);
+  blank_level(CL);
+  blank_level(CU);
+  unblank_level(SU);
+  blank_level(PC);
+
+  !init vectors to zero
+  for i:=1 to NP do
+    v(i):=vec(0,0,0);
+  endfor;
+
+  phi:=(1+sqrt(5))/2;
+  theta(1):=arctan(1/phi);
+  theta(2):=arctan(1/(phi+1));
+  theta(3):=arctan(1/(2*phi));
+
+  sinda:=sin(da);
+  cosda:=cos(da);
+  tanda:=tan(da);
+
+  ! x - anterior - posterior
+  ! y - lateral
+  ! z - down
+  csys_1p(#100,"origin", vec(0,0,0), 0,0,pa:level=CL,pen=PENCL);
+  mode_local(#100);
+  !v(1):=on(#100); ! toe
+  v(1):=vec(0,0,0);
+  csys_1p(#150, "solar plane", v(1), -90, 0, 0:level=CL,pen=PENCL);
+
+  v(2):=vec(ht/tanda,ht,0); !top of laminar attahtment
+  v(3):=v(2)+vec(ht*phi,-ht,wd); !distal rearmost point
+  v(4):=v(2)+vec(ht*phi,-ht*(1-(1/(phi+1))),wp); !proximal rearmost point
+
+  !find point v5 using projection
+  !csys_3p(#101, "semilunar_crest", v(1), vec((ht/tanda)+(ht*phi),ht*(1/(1+phi)),0), vec(0,0,1):level=CL,pen=PENCL);
+  ! 2-phi = 1/(1+phi)
+  csys_3p(#101, "semilunar_crest", v(1), vec((ht/tanda)+(ht*phi),ht*(2-phi),0), vec(0,0,1):level=CL,pen=PENCL);
+  poi_free(#102, v(2):level=CL,pen=PENCL);
+  mode_local(#101);
+  poi_proj(#103, on(#102):level=CL,pen=PENCL); 
+  mode_local(#100);
+  v(5):=on(#103); ! sagittal semi-lunar crest
+
+  v(6):=v(2)+vec(ht, -ht/(2*phi),0);
+
+  !v(7):=v(2)+vec(ht*phi,-ht,wd-pd); !distal inner rearmost point
+  v(7):= vec(v(3).x,v(5).y,wd-pd); !distal inner rearmost point
+
+  !v(8):=v(2)+vec(ht*phi,-ht*(1-(1/(phi+1))),wp-pp); !proximal inner rearmost point
+  ! phi-1 = 1-(1/(phi+1))
+  v(8):=v(2)+vec(ht*phi,-ht*(phi-1),wp-pp); !proximal inner rearmost point
+
+  v(9):=v(2)+vec(ht*phi,-ht,0); !sagittal distal rearmost point
+  v(10):=v(2)+vec(ht*phi,-ht*(1-(1/(phi+1))),0); !sagittal proximal rearmost point
+
+  ! Inner point of heel is a distance of h from the end of the palmar process.
+  ! It is computed like this in case the dorsal angle changes. An alternative
+  ! method would be to get v(11).x by adding ht to v(3).x.
+  v(11):=vec(ht*((1/tanda)+phi+1),0,0);
+
+  v(12):=vec((v(2).x+v(1).x)/2, (v(2).y+v(1).y)/2, 0);
+  v(13):=vec((v(4).x+v(3).x)/2, (v(4).y+v(3).y)/2, (v(4).z+v(3).z)/2);
+  v(14):=vec((v(6).x+v(5).x)/2, (v(6).y+v(5).y)/2, (v(6).z+v(5).z)/2);
+  v(15):=vec((v(8).x+v(7).x)/2, (v(8).y+v(7).y)/2, (v(8).z+v(7).z)/2);
+
+  !create points
+  for i:=1 to NP do
+    poi_free(#1000, v(i):level=CL,pen=PENCL);
+    !text(#2,v(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,"c"+str(i,1,0):level=CP,TSIZE=2); 
+  endfor;
+
+  ! Note: In the curve definitions we use on(#point) instead of v(index) because if
+  ! angle pa != 0 then coordinate system will have changed and the two values will
+  ! not coincide.
+
+  !create curves
+  ! distal outer edge
+  cur_conic(#9,"FREE", v(1), v(1) + vec(0, 0, 1), 0.4, v(3), v(3) + vec(-1, 0, 0):LEVEL=CU);
+
+  !proximal outer edge
+  csys_3p(#105, "coronet", v(2), v(10), v(2)+vec(0,0,1):level=CL,pen=PENCL);
+  mode_local(#105);
+  cur_conic(#10,"FREE", on(#1000.2), on(#1000.2) + vec(0,1,0), 0.4, on(#1000.4), on(#1000.4) + vec(-1, 0, 0):LEVEL=CU);
+  mode_local(#100);
+
+  ! semi-lunar crest
+!   csys_3p(#106, "semilunar_crest", v(5), v(9), v(5)+vec(0,0,1):level=CL,pen=PENCL);
+!   mode_local(#106);
+!   cur_conic(#15,"FREE", on(#1000.5), on(#1000.5) + vec(0,2,0), 0.7, on(#1000.7), on(#1000.7) + vec(-2*phi, -1, 0):blank=1);
+!   mode_local(#100);
+  !csys_3p(#106, "palmar_plane", v(1), v(9), v(1)+vec(0,0,1):level=CL,pen=PENCL);
+  !mode_local(#106);
+  cur_conic(#15,"FREE", on(#1000.5), on(#1000.5) + vec(0,0,1), 0.5, on(#1000.7), on(#1000.1) + vec(0, 0, 0):blank=1);
+  !mode_local(#100);
+  
+  cur_approx(#11, #15, "CUBIC", 1, 2:LEVEL=CU);
+    
+  ! joint egde - proximal inner edge
+  csys_3p(#107, "joint_edge", v(6), v(10), v(6)+vec(0,0,1):level=CL,pen=PENCL);
+  mode_local(#107);
+  cur_conic(#12,"FREE", on(#1000.6), on(#1000.6) + vec(0,1,0), 0.7, on(#1000.8), on(#1000.8) + vec(-1, 0, 0):LEVEL=CU);
+  mode_local(#100);
+  
+  !create bicubic surfaces
+  ! dorsal surface
+  !sur_ruled(#500, #9, #10:LEVEL=SU);
+  curves(1):=#9;
+  curves(2):=#10;
+  sur_curves(#500, 4, 2, curves, "ZEROTWIST_1":LEVEL=SU);
+  part(#600,pointcloud("p3_outer.asc", global_ref(#500), 25, 10),#100:LEVEL=PC);  
+  
+  !palmar surface
+  !sur_ruled(#501, #12, #11:LEVEL=SU);
+  curves(1):=#12;
+  curves(2):=#11;
+  sur_curves(#501, 4, 2, curves, "ZEROTWIST_1":LEVEL=SU);
+  part(#601,pointcloud("p3_inner.asc", global_ref(#501), 25, 10),#100:LEVEL=PC);  
+  
+  ! solar surface
+  !sur_ruled(#502, #11, #9:LEVEL=SU);
+  curves(1):=#9;
+  curves(2):=#11;
+  sur_curves(#502, 4, 2, curves, "ZEROTWIST_1":LEVEL=SU);
+  part(#602,pointcloud("p3_distal.asc", global_ref(#502), 25, 10),#100:LEVEL=PC);  
+
+  /*
+  ! create points for nodes
+  csys_1p(#110, "v5", v(5), 0, 0, -da:level=CL,pen=PENCL,blank=1);
+  poi_free(#111, v(5));
+  mode_local(#110);
+  csys_1p(#112, "v5-2", on(#111), 0, -90, 0:level=CL,pen=PENCL);
+  mode_local(#100);
+  */
+  ! intersect line projected from centre of semilunar crest with the solar plane
+  lin_ang(#115, v(5), da, -ht:level=CL,pen=PENCL, pen=4);
+  v(16) := intersect(#150, #115);
+  
+  v(17):= on(#9, 0.4);
+  v(18):= on(#9, 0.75);
+  v(19):= on(#10, 0.4);
+  !csys_3p(#110, "v16-v17-v5", v(16), v(17), v(5):level=CL,pen=PENCL);
+  !v(19):= intersect(#110, #10);
+  
+  v(20):= on(#10, 0.75);
+  
+  poi_free(#140, v(6));
+  mode_local(#150); ! solar plane
+  poi_proj(#141, on(#140));
+  mode_local(#100);
+  
+  v(29):=on(#141);
+
+  csys_3p(#120, "v10-v17-v19", v(10), v(17), v(19):level=CL,pen=PENCL);
+  csys_3p(#121, "v10-v18-v20", v(10), v(18), v(20):level=CL,pen=PENCL);
+
+  v(21):= intersect(#11, #120);
+  v(22):= intersect(#11, #121);
+  v(23):= intersect(#12, #120);
+  v(24):= intersect(#12, #121);
+
+  lin_free(#125, v(17), v(19):level=CL,pen=PENCL);
+  v(25):=on(#125, 0.5);
+  lin_free(#126, v(18), v(20):level=CL,pen=PENCL);
+  v(26):=on(#126, 0.5);
+  lin_free(#127, v(21), v(23):level=CL,pen=PENCL);
+  v(27):=on(#127, 0.5);
+  lin_free(#128, v(22), v(24):level=CL,pen=PENCL);
+  v(28):=on(#128, 0.5);
+  
+  
+  numpoints:= 29; !return the number of points in the part
+
+  !create points
+  for i:=1 to numpoints do
+    poi_free(#1, v(i):level=CP);
+    text(#2,v(i)+vec(act_tsize()/4,-act_tsize()/4,0),0,"c"+str(i,1,0):level=CP,TSIZE=2); 
+  endfor;
+  
+endmodule

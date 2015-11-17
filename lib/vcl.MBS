@@ -1,0 +1,45 @@
+! vcl.mbs Visible Coordinate Lines
+ ! 
+ ! Draw 3 axes to illustrate a coordinate system
+ !
+ ! X = red, Y = green, Z = blue
+ ! (because I'm used to "RGB" in that order and "XYZ" in that order)
+ 
+local geometry module vcl(
+ float delta:=10; ! half-width of the axis line
+ float axisthickness:=1; ! thickness of the axis lines
+ int linetype:=0 ! LFONT
+ );
+ 
+ vector xstart, xstop;
+ vector ystart, ystop;
+ vector zstart, zstop;
+ 
+ !int xaxis;
+ 
+ ref id(2);
+ 
+ beginmodule
+ 
+ !mode_basic (); ! probably redundant; force to BASIC coordinate system
+ 
+ ! draw a visible X axis from negative to positive
+ xstart := vec (-delta, 0, 0);
+ xstop := vec ( delta, 0, 0);
+ !xaxis := 1;
+ !lin_free(#xaxis, xstart, xstop: PEN=2, WIDTH=axisthickness, LFONT=linetype);
+ lin_free(#1, xstart, xstop: PEN=2, WIDTH=axisthickness, LFONT=linetype);
+ id(1):=#1;
+ poi_free(#4,on(id(1), 0.5));
+ 
+ ! draw a visible Y axis from negative to positive
+ ystart := vec (0, -delta, 0);
+ ystop := vec (0, delta, 0);
+ lin_free(#2, ystart, ystop: PEN=3, WIDTH=axisthickness, LFONT=linetype);
+ 
+ ! draw a visible Z axis from negative to positive
+ zstart := vec (0, 0, -delta);
+ zstop := vec (0, 0, delta);
+ lin_free(#3, zstart, zstop:PEN=4, WIDTH=axisthickness, LFONT=linetype);
+ 
+ endmodule
