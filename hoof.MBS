@@ -67,7 +67,7 @@ BEGINMODULE
   csys_3p(#1,"origin", vec(0, 0, 0), vec(1, 0, 0), vec(0, 1, 0):BLANK=1);
   part(#3,cb(ca, palmar_angle, 29, cb_wp, cb_wd, cb_wpp, cb_wpd, cp),#1:PEN=
     11,BLANK=0);
-  part(#4,wall2(#3, cp, toe_wall_thickness, quarter_wall_thickness, 
+  part(#4,wall(#3, cp, toe_wall_thickness, quarter_wall_thickness, 
     heel_wall_thickness, lamj_thickness, pb_tip_to_grnd, sole_thickness, 
     heel_width, heel_angle_side, heel_angle_back, coronet_angle, 
     bar_on_ground, scoop, toe_roll, sole_relief, wp, toe_point, widest_point

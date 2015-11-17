@@ -1,4 +1,4 @@
-module wall2(
+module wall(
 ref cb > "coffin bone part";
 int cb_points >"number of points in the coffin bone part";
 float toe_wt := 11.5 >"wall thickness at toe";
